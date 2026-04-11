@@ -669,7 +669,7 @@ OUTPUT REQUIREMENTS:
             if "finish_reason: SAFETY" in error_msg:
                 error_msg = "Gemini Safety Filter blocked the generation. Try a different prompt."
             
-            host_info = getattr(self.ollama_client, '_client', {}).get('base_url', 'unknown') if hasattr(self.ollama_client, '_client') else 'unknown'
+            host_info = getattr(self, 'ollama_host_used', 'unknown')
             logger.error(f"❌ Failed to generate dashboard: {error_msg} (Host: {host_info})")
             
             fallback_html = f"""
