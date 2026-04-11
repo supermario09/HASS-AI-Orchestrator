@@ -64,12 +64,16 @@ echo "  Decision Interval: ${DECISION_INTERVAL}s"
 echo "  GPU Enabled: $ENABLE_GPU"
 if [ -n "$HA_ACCESS_TOKEN" ]; then
     echo "  HA Access Token: PROVIDED (Length: ${#HA_ACCESS_TOKEN})"
+    # Switch to Direct Core Access to bypass Supervisor Proxy issues ONLY if still using default proxy URL
+    if [ "$HA_URL" == "http://supervisor/core" ]; then
+        export HA_URL="http://homeassistant:8123"
+        echo "  > Switching to Direct Core Access: $HA_URL"
+    else
+        echo "  > Using custom HA URL: $HA_URL"
+    fi
 else
     echo "  HA Access Token: NOT PROVIDED (Using Supervisor Token fallback)"
 fi
-# NOTE: HA URL routing is handled by main.py based on SUPERVISOR_TOKEN presence.
-# When SUPERVISOR_TOKEN is set, main.py uses http://supervisor/core (the proxy).
-echo "  HA URL (raw): $HA_URL"
 
 # Start Ollama server if using localhost
 if [[ "$OLLAMA_HOST" == *"localhost"* ]] || [[ "$OLLAMA_HOST" == *"127.0.0.1"* ]]; then
