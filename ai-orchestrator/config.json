@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "slug": "ai-orchestrator",
-    "description": "v1.0.4: Fix startup crash, WebSocket auth, agent loop stability, RAG disabled by default",
+    "description": "v1.0.5: Fix timezone — detect HA timezone so all timestamps show correct local time",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

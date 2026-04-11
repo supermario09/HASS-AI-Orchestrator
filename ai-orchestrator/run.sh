@@ -152,6 +152,22 @@ ln -sf /config/agents.yaml /app/backend/agents.yaml
 echo "Linked agents.yaml to persistent storage"
 
 echo "=========================================="
+echo "Setting timezone from Home Assistant config"
+echo "=========================================="
+
+# Read the timezone configured in HA and export it so Python's datetime.now()
+# returns the correct local time instead of UTC.
+# Falls back to UTC if the supervisor API is unreachable.
+if [ -n "$SUPERVISOR_TOKEN" ]; then
+    HA_TZ=$(curl -sf \
+        -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+        http://supervisor/core/api/config 2>/dev/null \
+        | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('time_zone','UTC'))" 2>/dev/null)
+fi
+export TZ="${HA_TZ:-UTC}"
+echo "Timezone: $TZ"
+
+echo "=========================================="
 echo "Starting FastAPI Backend"
 echo "=========================================="
 
