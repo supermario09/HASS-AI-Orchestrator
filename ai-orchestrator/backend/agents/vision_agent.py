@@ -58,6 +58,7 @@ class VisionAgent:
         decision_interval: int = 60,
         default_media_player: str = "media_player.kitchen_display",
         broadcast_func: Optional[Any] = None,
+        vision_enabled: bool = False,
     ):
         self.agent_id = agent_id
         self.name = name
@@ -70,11 +71,14 @@ class VisionAgent:
         self._broadcast_func = broadcast_func
         self.status = "idle"
         self.model_name = "gemini-vision"
+        self._vision_enabled = vision_enabled
 
         # Gemini setup
         api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
         self._vision_model = None
-        if _GENAI_AVAILABLE and api_key:
+        if not vision_enabled:
+            logger.info("VisionAgent: use_gemini_for_vision=false — vision analysis disabled")
+        elif _GENAI_AVAILABLE and api_key:
             try:
                 genai.configure(api_key=api_key)
                 self._vision_model = genai.GenerativeModel(gemini_model_name)
@@ -154,7 +158,17 @@ class VisionAgent:
             response = self._vision_model.generate_content([prompt, image])
             return response.text.strip()
         except Exception as e:
-            logger.error(f"VisionAgent: Gemini call failed for {entity_id}: {e}")
+            err_str = str(e)
+            # 429 rate limit — back off without logging as an error
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                logger.warning(
+                    f"VisionAgent: Gemini rate limit (429) for {entity_id}. "
+                    "Backing off 60s. Consider increasing decision_interval or "
+                    "disabling use_gemini_for_vision."
+                )
+                await asyncio.sleep(60)
+            else:
+                logger.error(f"VisionAgent: Gemini call failed for {entity_id}: {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -182,6 +196,15 @@ class VisionAgent:
             f"👁️ VisionAgent '{self.name}' started — "
             f"monitoring {len(self.entities)} camera(s) every {self.decision_interval}s"
         )
+
+        if not self._vision_enabled:
+            logger.info(
+                "VisionAgent: Vision analysis disabled (use_gemini_for_vision=false). "
+                "Enable it in the add-on options to start camera monitoring."
+            )
+            # Keep the loop alive so status is visible; wake up occasionally to recheck
+            while True:
+                await asyncio.sleep(300)
 
         if not self._vision_model:
             logger.warning(

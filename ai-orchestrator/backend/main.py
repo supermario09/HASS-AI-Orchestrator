@@ -183,6 +183,7 @@ async def lifespan(app: FastAPI):
     # Gemini Options (Initialize to avoid NameError on failure)
     gemini_api_key_opt = ""
     use_gemini_dashboard_opt = False
+    use_gemini_vision_opt = False
     gemini_model_name_opt = "gemini-robotics-er-1.5-preview"
     
     options_path = Path("/data/options.json")
@@ -197,10 +198,11 @@ async def lifespan(app: FastAPI):
                 # Gemini Options
                 gemini_api_key_opt = opts.get("gemini_api_key", "").strip()
                 use_gemini_dashboard_opt = opts.get("use_gemini_for_dashboard", False)
+                use_gemini_vision_opt = opts.get("use_gemini_for_vision", False)
                 gemini_model_name_opt = opts.get("gemini_model_name", "gemini-robotics-er-1.5-preview")
-                
+
                 print(f"DEBUG: Read dry_run={dry_run}, disable_telemetry={disable_telemetry}, has_token={bool(ha_access_token_opt)} from options.json")
-                print(f"DEBUG: Gemini: has_key={bool(gemini_api_key_opt)}, use_for_dash={use_gemini_dashboard_opt}, model={gemini_model_name_opt}")
+                print(f"DEBUG: Gemini: has_key={bool(gemini_api_key_opt)}, use_for_dash={use_gemini_dashboard_opt}, use_for_vision={use_gemini_vision_opt}, model={gemini_model_name_opt}")
         except Exception as e:
             print(f"⚠️ Failed to read options.json: {e}")
             # Fallback to env var
@@ -210,6 +212,7 @@ async def lifespan(app: FastAPI):
         dry_run = os.getenv("DRY_RUN_MODE", "true").lower() == "true"
         gemini_api_key_opt = os.getenv("GEMINI_API_KEY", "")
         use_gemini_dashboard_opt = os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
+        use_gemini_vision_opt = os.getenv("USE_GEMINI_FOR_VISION", "false").lower() == "true"
         gemini_model_name_opt = os.getenv("GEMINI_MODEL_NAME", "gemini-robotics-er-1.5-preview")
 
     # Diagnostics
@@ -353,6 +356,7 @@ async def lifespan(app: FastAPI):
                         decision_interval=agent_cfg.get('decision_interval', 60),
                         default_media_player=agent_cfg.get('media_player', "media_player.kitchen_display"),
                         broadcast_func=broadcast_to_dashboard,
+                        vision_enabled=use_gemini_vision_opt,
                     )
                 else:
                     # Standard Universal Agent (Ollama-based)

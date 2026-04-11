@@ -42,6 +42,7 @@
         "disable_telemetry": true,
         "gemini_api_key": "",
         "use_gemini_for_dashboard": false,
+        "use_gemini_for_vision": false,
         "gemini_model_name": "gemini-robotics-er-1.5-preview"
     },
     "schema": {
@@ -63,6 +64,7 @@
         "disable_telemetry": "bool",
         "gemini_api_key": "str?",
         "use_gemini_for_dashboard": "bool",
+        "use_gemini_for_vision": "bool",
         "gemini_model_name": "str"
     }
 }
