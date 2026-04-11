@@ -848,15 +848,13 @@ class MCPServer:
             }
 
         try:
+            # entity_id is the TTS engine; media_player_entity_id and message go into service_data
             await self.ha_client.call_service(
                 domain="tts",
                 service="speak",
-                entity_id=None,
-                **{
-                    "entity_id": "tts.google_ai_tts_2",
-                    "media_player_entity_id": media_player,
-                    "message": message,
-                },
+                entity_id="tts.google_ai_tts_2",
+                media_player_entity_id=media_player,
+                message=message,
             )
             logger.info(f"🔊 TTS spoken → {media_player}: {message!r}")
             return {

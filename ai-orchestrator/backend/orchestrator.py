@@ -731,12 +731,9 @@ OUTPUT REQUIREMENTS:
             await client.call_service(
                 domain="tts",
                 service="speak",
-                entity_id=None,
-                **{
-                    "entity_id": "tts.google_ai_tts_2",
-                    "media_player_entity_id": media_player,
-                    "message": message,
-                }
+                entity_id="tts.google_ai_tts_2",
+                media_player_entity_id=media_player,
+                message=message,
             )
             return True
         except Exception as e:

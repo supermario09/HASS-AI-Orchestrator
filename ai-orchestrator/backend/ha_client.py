@@ -175,14 +175,16 @@ class HAWebSocketClient:
                     future = self.pending_responses.pop(data["id"])
                     future.set_result(data)
 
-        except websockets.exceptions.ConnectionClosed:
+        except (websockets.exceptions.ConnectionClosed,
+                websockets.exceptions.InvalidState):
+            # Both are normal disconnect events — the reconnect loop will recover
             self.connected = False
             if not self._closing:
-                logger.warning("⚠️ HA WebSocket connection closed unexpectedly")
+                logger.warning("⚠️ HA WebSocket connection closed — reconnecting...")
         except Exception as e:
             self.connected = False
             if not self._closing:
-                logger.error(f"❌ Error in HA message receiver: {e}")
+                logger.error(f"❌ Unexpected error in HA message receiver: {e}")
         finally:
             self.connected = False
 
