@@ -322,8 +322,14 @@ If no action is needed, return an empty actions array.
     async def run_decision_loop(self):
         """Main decision loop that runs continuously"""
         self.status = "idle"
-        # Delay start slightly to allow system to settle
-        await asyncio.sleep(5)
+        # Wait until HA is connected before making the first decision.
+        # Avoids "Home Assistant not connected" errors on every agent at startup.
+        print(f"⏳ {self.name} waiting for Home Assistant connection...")
+        for _ in range(60):  # wait up to 60 seconds
+            ha = self.ha_client() if callable(self.ha_client) else self.ha_client
+            if ha and ha.connected:
+                break
+            await asyncio.sleep(1)
         print(f"✓ {self.name} decision loop started (interval: {self.decision_interval}s)")
         
         while True:

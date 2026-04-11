@@ -221,7 +221,7 @@ async def lifespan(app: FastAPI):
     # Otherwise, fallback to Direct Core Access.
     is_addon = bool(os.getenv("SUPERVISOR_TOKEN")) or options_path.exists()
     supervisor_token = os.getenv("SUPERVISOR_TOKEN", "")
-    
+
     ha_url = os.getenv("HA_URL")
     if is_addon and supervisor_token:
         ha_url = "http://supervisor/core"
@@ -236,14 +236,14 @@ async def lifespan(app: FastAPI):
 
     # Try to use a specific Long-Lived Access Token if provided, otherwise fallback to Supervisor Token
     ha_token = os.getenv("HA_ACCESS_TOKEN", "").strip() or ha_access_token_opt
-    
+
     # Determine which token to use for headers
     if supervisor_token:
-        # Supervisor Proxy Mode
+        # Supervisor Proxy Mode — supervisor token in header authenticates the proxy connection,
+        # LLAT (ha_token) is sent in the WebSocket auth packet to authenticate with HA core.
         header_token = supervisor_token
-        # Ensure we have a token (either manually provided or supervisor)
         if not ha_token:
-             ha_token = supervisor_token
+            ha_token = supervisor_token
         print(f"DEBUG: Using Supervisor Proxy Mode (LLAT priority: {bool(ha_access_token_opt)})")
     else:
         # Direct Core Access Mode
