@@ -237,19 +237,21 @@ async def lifespan(app: FastAPI):
         ha_url = "http://homeassistant.local:8123"
         print(f"DEBUG: No HA_URL set and not in add-on. Defaulting to {ha_url}")
 
-    # Try to use a specific Long-Lived Access Token if provided, otherwise fallback to Supervisor Token
-    ha_token = os.getenv("HA_ACCESS_TOKEN", "").strip() or ha_access_token_opt
-
-    # Determine which token to use for headers
+    # Determine which token to use for the WebSocket auth packet and HTTP headers.
+    # In supervisor proxy mode the SUPERVISOR_TOKEN is a valid HA admin token and
+    # is the only reliable token — a user-supplied LLAT may be expired/invalid.
+    # In direct access mode the LLAT is required.
     if supervisor_token:
-        # Supervisor Proxy Mode — supervisor token in header authenticates the proxy connection,
-        # LLAT (ha_token) is sent in the WebSocket auth packet to authenticate with HA core.
+        # Supervisor Proxy Mode:
+        #   - HTTP header uses supervisor_token (proxy validates this)
+        #   - WebSocket auth packet also uses supervisor_token (HA core validates this)
+        # A user-supplied LLAT is intentionally ignored here — it may be stale.
         header_token = supervisor_token
-        if not ha_token:
-            ha_token = supervisor_token
-        print(f"DEBUG: Using Supervisor Proxy Mode (LLAT priority: {bool(ha_access_token_opt)})")
+        ha_token = supervisor_token
+        print(f"DEBUG: Using Supervisor Proxy Mode (supervisor token for both header and WS auth)")
     else:
-        # Direct Core Access Mode
+        # Direct Core Access Mode — must use LLAT
+        ha_token = os.getenv("HA_ACCESS_TOKEN", "").strip() or ha_access_token_opt
         header_token = None
         print(f"DEBUG: Using Direct Core Access Mode (Token present: {bool(ha_token)})")
 
@@ -279,6 +281,7 @@ async def lifespan(app: FastAPI):
     # RAG is disabled by default — it requires the `nomic-embed-text` Ollama model and
     # blocks the event loop with synchronous embedding calls during ingestion.
     # Set ENABLE_RAG=true to opt in only if you have nomic-embed-text pulled.
+    rag_manager = None  # Must be initialised before the if-block so later code can always reference it
     enable_rag = os.getenv("ENABLE_RAG", "false").lower() == "true"
     if enable_rag:
         try:
@@ -420,7 +423,6 @@ async def lifespan(app: FastAPI):
     
     # 7.5 Start Specialist Agent Loops (Autonomous Mode)
     # Stagger startup by 30s per agent to avoid thundering-herd Ollama calls at boot.
-    import random
     for i, (agent_id, agent) in enumerate(agents.items()):
         if hasattr(agent, "run_decision_loop") and getattr(agent, "decision_interval", 0) > 0:
             stagger_delay = i * 30  # 0s, 30s, 60s, 90s … per agent
@@ -432,7 +434,7 @@ async def lifespan(app: FastAPI):
                     try:
                         await a.run_decision_loop()
                     except Exception as exc:
-                        logger.error(f"❌ Agent '{aid}' loop crashed: {exc}. Restarting in 60s…")
+                        print(f"❌ Agent '{aid}' loop crashed: {exc}. Restarting in 60s…")
                         await asyncio.sleep(60)
 
             asyncio.create_task(_start_agent_loop())
