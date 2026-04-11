@@ -42,7 +42,7 @@
         "disable_telemetry": true,
         "gemini_api_key": "",
         "use_gemini_for_dashboard": false,
-        "gemini_model_name": "gemini-1.5-pro"
+        "gemini_model_name": "gemini-robotics-er-1.5-preview"
     },
     "schema": {
         "ollama_host": "str",

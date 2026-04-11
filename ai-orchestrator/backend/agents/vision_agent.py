@@ -54,7 +54,7 @@ class VisionAgent:
         ha_client: Any,
         entities: List[str],           # Camera entity IDs
         gemini_api_key: Optional[str] = None,
-        gemini_model_name: str = "gemini-1.5-pro",
+        gemini_model_name: str = "gemini-robotics-er-1.5-preview",
         decision_interval: int = 60,
         default_media_player: str = "media_player.kitchen_display",
         broadcast_func: Optional[Any] = None,

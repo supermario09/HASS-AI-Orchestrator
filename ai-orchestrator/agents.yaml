@@ -45,7 +45,7 @@ agents:
       Monitor locks, door sensors, and motion sensors.
       If no motion is detected for 30 minutes and it is after 22:00, lock all doors.
       Report any anomalies (unexpected motion, door left open) via the speak_tts tool
-      targeting media_player.kitchen_display.
+      targeting media_player.YOUR_SPEAKER.
 
   # ----------------------------------------------------------------
   # Voice agent — uses speak_tts for proactive household announcements
@@ -61,7 +61,7 @@ agents:
       - Morning (07:00-09:00): Brief status summary (e.g. weather sensor, energy usage).
       - Evening (18:00-19:00): Remind about any open windows or doors.
       - Night (22:00): Confirm the house is locked and secure.
-      Use the speak_tts tool with media_player.kitchen_display to deliver messages.
+      Use the speak_tts tool with media_player.YOUR_SPEAKER to deliver messages.
       Keep messages short (under 20 words). Only announce if there is something worth saying.
 
   # ----------------------------------------------------------------
@@ -73,11 +73,11 @@ agents:
     name: "Vision Security Monitor"
     model: "gemini"             # Special flag — routes through Gemini Vision, not Ollama
     decision_interval: 120      # Check cameras every 2 minutes
-    media_player: "media_player.kitchen_display"
+    media_player: "media_player.YOUR_SPEAKER"   # Replace with your media_player entity
     entities:
-      - camera.front_entrance_doorbell
-      - camera.living_room_camera_hd_stream_direct
-      - camera.garage_cam_hd_stream
+      - camera.YOUR_FRONT_DOOR       # Replace with your actual camera entity IDs
+      - camera.YOUR_LIVING_ROOM
+      - camera.YOUR_GARAGE
     instruction: |
       Monitor cameras for security events.
       Alert when: a person is seen at the front door, unexpected vehicle in garage at night,

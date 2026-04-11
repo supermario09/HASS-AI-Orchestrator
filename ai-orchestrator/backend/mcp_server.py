@@ -916,7 +916,7 @@ class MCPServer:
 
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-1.5-pro")
+            model = genai.GenerativeModel("gemini-robotics-er-1.5-preview")
 
             # Build the multimodal prompt
             import PIL.Image

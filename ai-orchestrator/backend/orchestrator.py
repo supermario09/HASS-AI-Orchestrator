@@ -46,7 +46,7 @@ class Orchestrator:
         ollama_host: str = "http://localhost:11434",
         gemini_api_key: Optional[str] = None,
         use_gemini_for_dashboard: bool = False,
-        gemini_model_name: str = "gemini-1.5-pro"
+        gemini_model_name: str = "gemini-robotics-er-1.5-preview"
     ):
         """
         Initialize orchestrator.
@@ -61,7 +61,7 @@ class Orchestrator:
             ollama_host: Host URL for Ollama API
             gemini_api_key: Optional Google AI API Key
             use_gemini_for_dashboard: Whether to prioritize Gemini for visual dashboard
-            gemini_model_name: Gemini model to use (default: gemini-1.5-pro)
+            gemini_model_name: Gemini model to use (default: gemini-robotics-er-1.5-preview)
         """
         self._ha_provider = ha_client
         self.mcp_server = mcp_server
@@ -109,7 +109,7 @@ class Orchestrator:
         # Gemini setup (optional)
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self.use_gemini_for_dashboard = use_gemini_for_dashboard or os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
-        self.gemini_model_name = gemini_model_name or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+        self.gemini_model_name = gemini_model_name or os.getenv("GEMINI_MODEL_NAME", "gemini-robotics-er-1.5-preview")
 
         if self.gemini_api_key and _GENAI_AVAILABLE:
             genai.configure(api_key=self.gemini_api_key)

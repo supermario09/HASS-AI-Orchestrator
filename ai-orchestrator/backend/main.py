@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
     # Gemini Options (Initialize to avoid NameError on failure)
     gemini_api_key_opt = ""
     use_gemini_dashboard_opt = False
-    gemini_model_name_opt = "gemini-1.5-pro"
+    gemini_model_name_opt = "gemini-robotics-er-1.5-preview"
     
     options_path = Path("/data/options.json")
     if options_path.exists():
@@ -197,7 +197,7 @@ async def lifespan(app: FastAPI):
                 # Gemini Options
                 gemini_api_key_opt = opts.get("gemini_api_key", "").strip()
                 use_gemini_dashboard_opt = opts.get("use_gemini_for_dashboard", False)
-                gemini_model_name_opt = opts.get("gemini_model_name", "gemini-1.5-pro")
+                gemini_model_name_opt = opts.get("gemini_model_name", "gemini-robotics-er-1.5-preview")
                 
                 print(f"DEBUG: Read dry_run={dry_run}, disable_telemetry={disable_telemetry}, has_token={bool(ha_access_token_opt)} from options.json")
                 print(f"DEBUG: Gemini: has_key={bool(gemini_api_key_opt)}, use_for_dash={use_gemini_dashboard_opt}, model={gemini_model_name_opt}")
@@ -210,7 +210,7 @@ async def lifespan(app: FastAPI):
         dry_run = os.getenv("DRY_RUN_MODE", "true").lower() == "true"
         gemini_api_key_opt = os.getenv("GEMINI_API_KEY", "")
         use_gemini_dashboard_opt = os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
-        gemini_model_name_opt = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+        gemini_model_name_opt = os.getenv("GEMINI_MODEL_NAME", "gemini-robotics-er-1.5-preview")
 
     # Diagnostics
     print(f"DEBUG: ENV - SUPERVISOR_TOKEN: {bool(os.getenv('SUPERVISOR_TOKEN'))}")
@@ -349,7 +349,7 @@ async def lifespan(app: FastAPI):
                         ha_client=lambda: ha_client,
                         entities=entities,
                         gemini_api_key=gemini_api_key_opt or os.getenv("GEMINI_API_KEY"),
-                        gemini_model_name=gemini_model_name_opt or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro"),
+                        gemini_model_name=gemini_model_name_opt or os.getenv("GEMINI_MODEL_NAME", "gemini-robotics-er-1.5-preview"),
                         decision_interval=agent_cfg.get('decision_interval', 60),
                         default_media_player=agent_cfg.get('media_player', "media_player.kitchen_display"),
                         broadcast_func=broadcast_to_dashboard,
@@ -396,7 +396,7 @@ async def lifespan(app: FastAPI):
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         gemini_api_key=gemini_api_key_opt or os.getenv("GEMINI_API_KEY"),
         use_gemini_for_dashboard=use_gemini_dashboard_opt or os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true",
-        gemini_model_name=gemini_model_name_opt or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+        gemini_model_name=gemini_model_name_opt or os.getenv("GEMINI_MODEL_NAME", "gemini-robotics-er-1.5-preview")
     )
     print(f"✓ Orchestrator initialized with model {orchestrator.model_name}")
     
@@ -696,7 +696,7 @@ async def get_config():
         "version": VERSION,
         "gemini_active": orchestrator.gemini_model is not None if orchestrator else False,
         "use_gemini_for_dashboard": orchestrator.use_gemini_for_dashboard if orchestrator else False,
-        "gemini_model_name": orchestrator.gemini_model_name if orchestrator else "gemini-1.5-pro",
+        "gemini_model_name": orchestrator.gemini_model_name if orchestrator else "gemini-robotics-er-1.5-preview",
         "agents": {
             k: getattr(v, "model_name", "unknown") for k, v in agents.items()
         }
