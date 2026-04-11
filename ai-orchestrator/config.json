@@ -1,9 +1,9 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.0",
+    "version": "1.0.4",
     "slug": "ai-orchestrator",
-    "description": "v1.0: Stable multi-agent orchestration + Voice (Google AI TTS) + Vision (Gemini camera analysis)",
-    "url": "https://github.com/ITSpecialist111/HASS-AI-Orchestrator",
+    "description": "v1.0.4: Fix startup crash, WebSocket auth, agent loop stability, RAG disabled by default",
+    "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",
         "armv7",
