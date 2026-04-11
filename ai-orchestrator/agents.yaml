@@ -1,54 +1,110 @@
 agents:
+
+  # ----------------------------------------------------------------
+  # Climate agents — unified to mistral:7b-instruct for stability
+  # Interval raised to 300s (5 min) to reduce load on large HA instances
+  # ----------------------------------------------------------------
+
   - id: "heating"
     name: "Heating Manager"
     model: "mistral:7b-instruct"
-    decision_interval: 120
-    entities: []  # populated from env vars for backward compatibility if needed, or specific list here
+    decision_interval: 300
+    entities: []   # Dynamic discovery — will use climate + sensor domains
     instruction: |
-      Maintain comfortable temperature (21C day, 18C night).
-      Turn off if windows are open.
-      
+      Maintain comfortable temperature: 21°C during the day (08:00-22:00), 18°C at night.
+      Turn off heating if a window or door has been open for more than 10 minutes.
+      Never exceed MAX_TEMP (30°C) or drop below MIN_TEMP (10°C).
+
   - id: "cooling"
     name: "Cooling Manager"
     model: "mistral:7b-instruct"
-    decision_interval: 120
+    decision_interval: 300
+    entities: []
     instruction: |
-      Keep temperature below 25C. 
-      Use fans first, then AC.
-      
+      Keep indoor temperature below 25°C on warm days.
+      Prefer fans over AC where possible to save energy.
+      If AC is running and windows are open, turn off AC and log the event.
+
   - id: "lighting"
     name: "Lighting Manager"
-    model: "phi3.5:3.8b"
-    decision_interval: 60
+    model: "mistral:7b-instruct"    # Changed from phi3.5:3.8b — likely not installed
+    decision_interval: 300
+    entities: []
     instruction: |
       Manage lights based on occupancy and time of day.
-      Use warmer colors (2700K) in the evening.
-      
+      Use warmer colours (2700K) in the evening (after 18:00).
+      Turn off lights in rooms with no motion for 15 minutes.
+      Dim to 30% brightness in bedrooms after 21:00.
+
   - id: "security"
     name: "Security Manager"
     model: "mistral:7b-instruct"
-    decision_interval: 180
+    decision_interval: 300
+    entities: []
     instruction: |
-      Monitor locks and sensors.
-      Lock doors if no motion for 30 mins.
-      Report any anomalies.
+      Monitor locks, door sensors, and motion sensors.
+      If no motion is detected for 30 minutes and it is after 22:00, lock all doors.
+      Report any anomalies (unexpected motion, door left open) via the speak_tts tool
+      targeting media_player.kitchen_display.
 
-  # Example of a new custom agent
+  # ----------------------------------------------------------------
+  # Voice agent — uses speak_tts for proactive household announcements
+  # ----------------------------------------------------------------
+
+  - id: "voice"
+    name: "Voice Announcer"
+    model: "mistral:7b-instruct"
+    decision_interval: 3600     # Once per hour
+    entities: []
+    instruction: |
+      Provide helpful household announcements at appropriate times:
+      - Morning (07:00-09:00): Brief status summary (e.g. weather sensor, energy usage).
+      - Evening (18:00-19:00): Remind about any open windows or doors.
+      - Night (22:00): Confirm the house is locked and secure.
+      Use the speak_tts tool with media_player.kitchen_display to deliver messages.
+      Keep messages short (under 20 words). Only announce if there is something worth saying.
+
+  # ----------------------------------------------------------------
+  # Vision agent — Gemini Vision monitors cameras for security events
+  # Requires: GEMINI_API_KEY set in add-on configuration
+  # ----------------------------------------------------------------
+
+  - id: "vision"
+    name: "Vision Security Monitor"
+    model: "gemini"             # Special flag — routes through Gemini Vision, not Ollama
+    decision_interval: 120      # Check cameras every 2 minutes
+    media_player: "media_player.kitchen_display"
+    entities:
+      - camera.front_entrance_doorbell
+      - camera.living_room_camera_hd_stream_direct
+      - camera.garage_cam_hd_stream
+    instruction: |
+      Monitor cameras for security events.
+      Alert when: a person is seen at the front door, unexpected vehicle in garage at night,
+      or any unusual activity is detected.
+      Announce detections via TTS. Keep announcements short and factual.
+
+  # ----------------------------------------------------------------
+  # Custom / example agents (commented out — uncomment to enable)
+  # ----------------------------------------------------------------
+
+  # - id: "energy"
+  #   name: "Energy Optimiser"
+  #   model: "mistral:7b-instruct"
+  #   decision_interval: 600
+  #   entities: []
+  #   instruction: |
+  #     Monitor energy consumption sensors.
+  #     If solar production is high (above 3kW), suggest pre-cooling or pre-heating the house.
+  #     Log any spikes in consumption above the daily average.
+
   # - id: "pool_manager"
-  #   name: "Pool Guy"
+  #   name: "Pool Manager"
   #   model: "mistral:7b-instruct"
   #   decision_interval: 3600
-  #   entities: 
+  #   entities:
   #     - switch.pool_pump
   #     - sensor.pool_temp
   #   instruction: |
-  #     Run the pool pump for 8 hours/day.
-  #     Ensure temp is above 20C before heating.
-
-  - id: "custom_agent"
-    name: "Custom Agent"
-    model: "mistral:7b-instruct"
-    decision_interval: 120
-    entities:
-      - climate.ethan
-    instruction: "I want you to monitor ethans room temp this shouold be 10 degrees all the time"
+  #     Run the pool pump for 8 hours per day.
+  #     Ensure temperature is above 20°C before enabling heating.

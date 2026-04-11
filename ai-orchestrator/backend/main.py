@@ -99,6 +99,7 @@ from agents.lighting_agent import LightingAgent
 from agents.security_agent import SecurityAgent
 from agents.universal_agent import UniversalAgent
 from agents.architect_agent import ArchitectAgent
+from agents.vision_agent import VisionAgent
 from analytics import router as analytics_router
 from factory_router import router as factory_router
 from ingress_middleware import IngressMiddleware
@@ -257,13 +258,13 @@ async def lifespan(app: FastAPI):
     
     # 3. Start HA Client with Reconnection Loop
     try:
-        # Start the background reconnection loop
+        # Start the background reconnection loop first
         asyncio.create_task(ha_client.run_reconnect_loop())
-        
-        # Wait up to 5s for early feedback
-        connected = await ha_client.wait_until_connected(timeout=5.0)
+
+        # Wait up to 30s — longer than upstream's 5s to handle slow/busy HA instances
+        connected = await ha_client.wait_until_connected(timeout=30.0)
         if not connected:
-            print("⚠️ HA Client did not connect within initial 5s burst. Reconnection loop will continue in background...")
+            print("⚠️ HA Client did not connect within 30s. Reconnection loop will keep retrying in background...")
         else:
             print("✅ HA Client connected successfully")
     except Exception as e:
@@ -328,29 +329,46 @@ async def lifespan(app: FastAPI):
                 
             for agent_cfg in config.get('agents', []):
                 agent_id = agent_cfg['id']
-                
+
                 # Check if entities are defined in yaml, otherwise fallback to env vars (backwards compat)
                 entities = agent_cfg.get('entities', [])
                 if not entities:
-                    # Legacy fallback
                     env_var = f"{agent_id.upper()}_ENTITIES"
                     raw = os.getenv(env_var, "")
                     entities = [e.strip() for e in raw.split(",") if e.strip()]
-                
-                # Create Universal Agent
-                agents[agent_id] = UniversalAgent(
-                    agent_id=agent_id,
-                    name=agent_cfg['name'],
-                    instruction=agent_cfg['instruction'],
-                    mcp_server=mcp_server,
-                    ha_client=lambda: ha_client,
-                    entities=entities,
-                    rag_manager=rag_manager,
-                    model_name=agent_cfg.get('model', os.getenv("DEFAULT_MODEL", "mistral:7b-instruct")),
-                    decision_interval=agent_cfg.get('decision_interval', 120),
-                    broadcast_func=broadcast_to_dashboard,
-                    knowledge=agent_cfg.get('knowledge', "")
-                )
+
+                model_name = agent_cfg.get('model', os.getenv("DEFAULT_MODEL", "mistral:7b-instruct"))
+
+                # Vision agent — routes inference through Gemini Vision, not Ollama
+                if model_name == "gemini" or agent_id == "vision":
+                    agents[agent_id] = VisionAgent(
+                        agent_id=agent_id,
+                        name=agent_cfg['name'],
+                        instruction=agent_cfg['instruction'],
+                        mcp_server=mcp_server,
+                        ha_client=lambda: ha_client,
+                        entities=entities,
+                        gemini_api_key=gemini_api_key_opt or os.getenv("GEMINI_API_KEY"),
+                        gemini_model_name=gemini_model_name_opt or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro"),
+                        decision_interval=agent_cfg.get('decision_interval', 60),
+                        default_media_player=agent_cfg.get('media_player', "media_player.kitchen_display"),
+                        broadcast_func=broadcast_to_dashboard,
+                    )
+                else:
+                    # Standard Universal Agent (Ollama-based)
+                    agents[agent_id] = UniversalAgent(
+                        agent_id=agent_id,
+                        name=agent_cfg['name'],
+                        instruction=agent_cfg['instruction'],
+                        mcp_server=mcp_server,
+                        ha_client=lambda: ha_client,
+                        entities=entities,
+                        rag_manager=rag_manager,
+                        model_name=model_name,
+                        decision_interval=agent_cfg.get('decision_interval', 120),
+                        broadcast_func=broadcast_to_dashboard,
+                        knowledge=agent_cfg.get('knowledge', "")
+                    )
                 print(f"  ✓ Loaded agent: {agent_cfg['name']} ({agent_id})")
                 
         except Exception as e:
@@ -443,9 +461,59 @@ async def health_check():
     }
 
 
+@app.get("/api/health/ready")
+async def health_ready():
+    """
+    Readiness probe — returns 200 only once HA is connected.
+    Returns 503 while still connecting (useful for Docker/k8s probes
+    and for the frontend to know whether to show a 'connecting' spinner).
+    """
+    if ha_client and ha_client.connected:
+        return {"status": "ready", "ha_connected": True}
+    return JSONResponse(
+        status_code=503,
+        content={"status": "starting", "ha_connected": False,
+                 "message": "Waiting for Home Assistant connection..."}
+    )
+
+
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class VoiceSpeakRequest(BaseModel):
+    message: str
+    media_player: str = "media_player.kitchen_display"
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(req: VoiceSpeakRequest):
+    """
+    Speak a message via Home Assistant Google AI TTS.
+
+    Body:
+        message:      Text to speak (required)
+        media_player: Target HA media_player entity (default: media_player.kitchen_display)
+
+    Returns a success/failure result.
+    """
+    if not mcp_server:
+        raise HTTPException(status_code=503, detail="MCP Server not initialized")
+    if not ha_client or not ha_client.connected:
+        raise HTTPException(status_code=503, detail="Home Assistant not connected")
+
+    result = await mcp_server.execute_tool(
+        "speak_tts",
+        {"message": req.message, "media_player": req.media_player},
+        agent_id="api",
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    return result
+
 
 @app.post("/api/chat")
 async def chat_with_orchestrator(req: ChatRequest):
@@ -660,18 +728,23 @@ async def update_config(req: UpdateConfigRequest):
             print(f"🔄 Runtime Config Update: Use Gemini for Dashboard set to {req.use_gemini_for_dashboard}")
         
         if req.gemini_api_key is not None:
-            import google.generativeai as genai
-            orchestrator.gemini_api_key = req.gemini_api_key
-            genai.configure(api_key=req.gemini_api_key)
-            # Re-init model with current or new model name
-            orchestrator.gemini_model = genai.GenerativeModel(orchestrator.gemini_model_name)
-            print(f"🔄 Runtime Config Update: Gemini API Key updated")
+            try:
+                import google.generativeai as genai
+                orchestrator.gemini_api_key = req.gemini_api_key
+                genai.configure(api_key=req.gemini_api_key)
+                orchestrator.gemini_model = genai.GenerativeModel(orchestrator.gemini_model_name)
+                print(f"🔄 Runtime Config Update: Gemini API Key updated")
+            except ImportError:
+                print("⚠️ google-generativeai not installed — cannot configure Gemini.")
 
         if req.gemini_model_name is not None:
-            import google.generativeai as genai
-            orchestrator.gemini_model_name = req.gemini_model_name
-            orchestrator.gemini_model = genai.GenerativeModel(req.gemini_model_name)
-            print(f"🔄 Runtime Config Update: Gemini Model set to {req.gemini_model_name}")
+            try:
+                import google.generativeai as genai
+                orchestrator.gemini_model_name = req.gemini_model_name
+                orchestrator.gemini_model = genai.GenerativeModel(req.gemini_model_name)
+                print(f"🔄 Runtime Config Update: Gemini Model set to {req.gemini_model_name}")
+            except ImportError:
+                print("⚠️ google-generativeai not installed — cannot configure Gemini.")
 
     return {
         "status": "success", 

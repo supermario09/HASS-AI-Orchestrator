@@ -11,7 +11,16 @@ from pathlib import Path
 
 import ollama
 import os
-import google.generativeai as genai
+
+# Guard Gemini import — if the package is missing or has a version conflict the
+# entire backend should NOT crash.  We degrade gracefully to Ollama-only mode.
+try:
+    import google.generativeai as genai
+    _GENAI_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    genai = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
+
 from workflow_graph import (
     OrchestratorState, Task, Decision, Conflict,
     create_workflow
@@ -102,13 +111,16 @@ class Orchestrator:
         self.use_gemini_for_dashboard = use_gemini_for_dashboard or os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true"
         self.gemini_model_name = gemini_model_name or os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
 
-        if self.gemini_api_key:
+        if self.gemini_api_key and _GENAI_AVAILABLE:
             genai.configure(api_key=self.gemini_api_key)
             self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
             logger.info(f"Gemini API detected - visual dashboard configured to use {self.gemini_model_name} (Active: {self.use_gemini_for_dashboard}).")
         else:
             self.gemini_model = None
-            logger.info("No Gemini API key found - visual dashboard will fallback to Ollama.")
+            if not _GENAI_AVAILABLE:
+                logger.warning("google-generativeai package not available — running in Ollama-only mode.")
+            else:
+                logger.info("No Gemini API key found - visual dashboard will fallback to Ollama.")
             
         self.last_dashboard_instruction = "Mixergy-style smart home dashboard"
         self.dashboard_refresh_interval = int(os.getenv("DASHBOARD_REFRESH_INTERVAL", "300")) # 5 minutes
@@ -692,6 +704,44 @@ OUTPUT REQUIREMENTS:
             except Exception as save_err:
                 logger.error(f"Could not save fallback HTML: {save_err}")
             return fallback_html
+
+    async def announce_decision(self, agent_name: str, summary: str,
+                                media_player: str = "media_player.kitchen_display") -> bool:
+        """
+        Speak an agent decision aloud via Home Assistant TTS (Google AI TTS).
+        Called automatically for high/critical impact decisions before execution.
+
+        Args:
+            agent_name: Human-readable agent name (e.g. "Security Agent")
+            summary:    Short description of the action being taken
+            media_player: HA media_player entity to speak through
+
+        Returns:
+            True if the TTS call succeeded, False otherwise.
+        """
+        client = self.ha_client
+        if not client or not client.connected:
+            logger.warning("announce_decision: HA not connected, skipping TTS.")
+            return False
+
+        message = f"{agent_name}: {summary}"
+        logger.info(f"📢 TTS Announcement → {media_player}: {message!r}")
+
+        try:
+            await client.call_service(
+                domain="tts",
+                service="speak",
+                entity_id=None,
+                **{
+                    "entity_id": "tts.google_ai_tts_2",
+                    "media_player_entity_id": media_player,
+                    "message": message,
+                }
+            )
+            return True
+        except Exception as e:
+            logger.error(f"announce_decision TTS call failed: {e}")
+            return False
 
     @property
     def ha_client(self):

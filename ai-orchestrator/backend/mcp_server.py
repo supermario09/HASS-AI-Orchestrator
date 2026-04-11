@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -7,6 +8,16 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, ValidationError
 
 from ha_client import HAWebSocketClient
+
+logger = logging.getLogger(__name__)
+
+# Guard Gemini import for vision analysis
+try:
+    import google.generativeai as genai
+    _GENAI_AVAILABLE = True
+except Exception:
+    genai = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
 
 
 class SetTemperatureParams(BaseModel):
@@ -281,6 +292,63 @@ class MCPServer:
                     "required": ["entity_id"]
                 },
                 "handler": self._get_state
+            },
+            # ----------------------------------------------------------------
+            # Voice tool (v1.0)
+            # ----------------------------------------------------------------
+            "speak_tts": {
+                "name": "speak_tts",
+                "description": (
+                    "Speak a message aloud via Home Assistant Google AI TTS "
+                    "(tts.google_ai_tts_2). Use this to announce important events, "
+                    "alerts, or summaries to the household."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "Text to speak (keep concise, under 200 characters)"
+                        },
+                        "media_player": {
+                            "type": "string",
+                            "description": (
+                                "Target media_player entity ID. "
+                                "Defaults to media_player.kitchen_display"
+                            ),
+                            "default": "media_player.kitchen_display"
+                        }
+                    },
+                    "required": ["message"]
+                },
+                "handler": self._speak_tts
+            },
+            # ----------------------------------------------------------------
+            # Vision tool (v2.0)
+            # ----------------------------------------------------------------
+            "analyze_camera": {
+                "name": "analyze_camera",
+                "description": (
+                    "Capture a snapshot from a Home Assistant camera and analyze it "
+                    "using Gemini Vision AI. Use for security monitoring, detecting "
+                    "people at the door, package detection, etc."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {
+                            "type": "string",
+                            "description": "Camera entity ID (e.g. camera.front_entrance_doorbell)"
+                        },
+                        "question": {
+                            "type": "string",
+                            "description": "What to look for in the image",
+                            "default": "Describe what you see. Note any people, vehicles, or unusual activity."
+                        }
+                    },
+                    "required": ["entity_id"]
+                },
+                "handler": self._analyze_camera
             }
         }
     
@@ -738,22 +806,137 @@ class MCPServer:
         return {"action": "log", "message": message, "logged": True}
 
     async def _get_state(self, params: Dict) -> Dict:
-        # Generic get state handler
+        """Generic get state handler"""
         entity_id = params["entity_id"]
         try:
-            # We can reuse get_climate_state's logic or call ha_client directly
-            # HAWebSocketClient likely has a generic get_state or we can fallback to listening
-            # But ha_client.get_climate_state just returns the state dict from registry
-            # We need to expose a generic get_state in ha_client if it doesn't exist
-            # Checking ha_client usage... it seems we only have get_climate_state exposed in the snippet I saw?
-            # Let's assume ha_client has a way to get state from its local cache
-            # Actually, looking at previous files, ha_client.states is a dict.
-            
-            # Accessing ha_client states directly
             state = await self.ha_client.get_states(entity_id=entity_id)
             if state:
-                return {"entity_id": entity_id, "state": state.get("state"), "attributes": state.get("attributes")}
-            else:
-                return {"error": f"Entity {entity_id} not found in registry"}
+                return {
+                    "entity_id": entity_id,
+                    "state": state.get("state"),
+                    "attributes": state.get("attributes"),
+                }
+            return {"error": f"Entity {entity_id} not found in registry"}
         except Exception as e:
             return {"error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Voice handler (v1.0)
+    # ----------------------------------------------------------------
+
+    async def _speak_tts(self, params: Dict) -> Dict:
+        """
+        Speak a message via Home Assistant Google AI TTS.
+
+        Uses the HA tts.speak service targeting tts.google_ai_tts_2.
+        Respects dry_run mode — in dry_run the message is logged but not spoken.
+        """
+        message = params.get("message", "").strip()
+        media_player = params.get("media_player", "media_player.kitchen_display")
+
+        if not message:
+            return {"error": "speak_tts: message cannot be empty"}
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] 🔊 TTS → {media_player}: {message!r}")
+            return {
+                "action": "speak_tts",
+                "message": message,
+                "media_player": media_player,
+                "executed": False,
+                "dry_run": True,
+            }
+
+        try:
+            await self.ha_client.call_service(
+                domain="tts",
+                service="speak",
+                entity_id=None,
+                **{
+                    "entity_id": "tts.google_ai_tts_2",
+                    "media_player_entity_id": media_player,
+                    "message": message,
+                },
+            )
+            logger.info(f"🔊 TTS spoken → {media_player}: {message!r}")
+            return {
+                "action": "speak_tts",
+                "message": message,
+                "media_player": media_player,
+                "executed": True,
+            }
+        except Exception as e:
+            logger.error(f"speak_tts failed: {e}")
+            return {"error": str(e), "action": "speak_tts", "executed": False}
+
+    # ----------------------------------------------------------------
+    # Vision handler (v2.0)
+    # ----------------------------------------------------------------
+
+    async def _analyze_camera(self, params: Dict) -> Dict:
+        """
+        Capture a camera snapshot and analyze it with Gemini Vision.
+
+        Requires:
+          - google-generativeai installed and a Gemini API key configured
+          - The HA camera entity to be accessible (not unavailable)
+
+        Falls back to a descriptive error if Gemini is not available.
+        """
+        entity_id = params.get("entity_id", "")
+        question = params.get(
+            "question",
+            "Describe what you see. Note any people, vehicles, packages, or unusual activity."
+        )
+
+        if not entity_id:
+            return {"error": "analyze_camera: entity_id is required"}
+
+        # 1. Capture snapshot
+        try:
+            image_bytes = await self.ha_client.get_camera_snapshot(entity_id)
+        except Exception as e:
+            return {"error": f"Failed to capture snapshot from {entity_id}: {e}"}
+
+        # 2. Analyze with Gemini Vision
+        if not _GENAI_AVAILABLE:
+            return {
+                "error": "google-generativeai is not installed — vision analysis unavailable",
+                "entity_id": entity_id,
+                "snapshot_bytes": len(image_bytes),
+            }
+
+        # Retrieve API key from env (set during orchestrator init)
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            return {
+                "error": "GEMINI_API_KEY not set — vision analysis requires Gemini API access",
+                "entity_id": entity_id,
+            }
+
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-1.5-pro")
+
+            # Build the multimodal prompt
+            import PIL.Image
+            import io
+            image = PIL.Image.open(io.BytesIO(image_bytes))
+
+            response = model.generate_content([
+                f"Camera: {entity_id}\nQuestion: {question}",
+                image,
+            ])
+            analysis = response.text.strip()
+
+            logger.info(f"📷 Vision analysis for {entity_id}: {analysis[:100]}...")
+            return {
+                "action": "analyze_camera",
+                "entity_id": entity_id,
+                "question": question,
+                "analysis": analysis,
+                "snapshot_bytes": len(image_bytes),
+            }
+        except Exception as e:
+            logger.error(f"analyze_camera Gemini call failed: {e}")
+            return {"error": f"Vision analysis failed: {e}", "entity_id": entity_id}

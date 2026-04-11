@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "0.9.47",
+    "version": "1.0.0",
     "slug": "ai-orchestrator",
-    "description": "Phase 6: Universal Agents, RAG, and No-Code Factory for Home Assistant",
+    "description": "v1.0: Stable multi-agent orchestration + Voice (Google AI TTS) + Vision (Gemini camera analysis)",
     "url": "https://github.com/ITSpecialist111/HASS-AI-Orchestrator",
     "arch": [
         "amd64",
@@ -42,7 +42,7 @@
         "disable_telemetry": true,
         "gemini_api_key": "",
         "use_gemini_for_dashboard": false,
-        "gemini_model_name": "gemini-robotics-er-1.5-preview"
+        "gemini_model_name": "gemini-1.5-pro"
     },
     "schema": {
         "ollama_host": "str",

@@ -1,16 +1,82 @@
-from typing import List, Dict, Any, Optional
+"""
+Universal Agent — driven entirely by natural language instructions and a YAML entity list.
+
+Stability improvements over upstream:
+- Entity discovery result is cached for 5 minutes (reduces load on large HA instances)
+- Heuristic fallback capped at 20 entities (keeps LLM context small)
+- Domain filtering based on instruction keywords before loading all states
+- Fixed: truncated _get_state_description() that silently returned None for static entities
+"""
+
+import asyncio
+import re
 import json
-from datetime import datetime
+import logging
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+
 from .base_agent import BaseAgent
 from mcp_server import MCPServer
 from ha_client import HAWebSocketClient
+
+logger = logging.getLogger(__name__)
+
+# Domains that can be controlled (used for heuristic filtering)
+_CONTROL_DOMAINS = ["climate", "light", "switch", "lock", "cover", "fan", "media_player"]
+_SENSOR_DOMAINS  = ["sensor", "binary_sensor"]
+_ALL_INTERESTING = _CONTROL_DOMAINS + _SENSOR_DOMAINS
+
+# Keyword → domain mappings for instruction-based pre-filtering
+_KEYWORD_TO_DOMAINS: Dict[str, List[str]] = {
+    "temperature": ["climate", "sensor"],
+    "heat":        ["climate"],
+    "cool":        ["climate"],
+    "hvac":        ["climate"],
+    "light":       ["light"],
+    "bright":      ["light"],
+    "lamp":        ["light"],
+    "dim":         ["light"],
+    "lock":        ["lock"],
+    "door":        ["lock", "binary_sensor"],
+    "window":      ["cover", "binary_sensor"],
+    "blind":       ["cover"],
+    "shutter":     ["cover"],
+    "fan":         ["fan"],
+    "music":       ["media_player"],
+    "speaker":     ["media_player"],
+    "motion":      ["binary_sensor"],
+    "occupancy":   ["binary_sensor"],
+    "security":    ["lock", "alarm_control_panel", "binary_sensor", "camera"],
+    "alarm":       ["alarm_control_panel"],
+    "camera":      ["camera"],
+    "presence":    ["binary_sensor", "device_tracker"],
+    "energy":      ["sensor", "switch"],
+    "power":       ["sensor", "switch"],
+    "switch":      ["switch"],
+    "voice":       [],   # voice agent — no entity filter
+    "announce":    [],
+}
+
+# Cache TTL for entity discovery (5 minutes)
+_ENTITY_CACHE_TTL = timedelta(minutes=5)
+
+
+def _infer_domains_from_instruction(instruction: str) -> List[str]:
+    """Return a de-duped list of HA domains relevant to the instruction text."""
+    lowered = instruction.lower()
+    domains: List[str] = []
+    for kw, doms in _KEYWORD_TO_DOMAINS.items():
+        if kw in lowered:
+            domains.extend(doms)
+    return list(dict.fromkeys(domains))  # preserve order, deduplicate
+
 
 class UniversalAgent(BaseAgent):
     """
     A universal agent that operates based on natural language instructions
     and a dynamic list of entities, rather than hardcoded logic.
     """
-    
+
     def __init__(
         self,
         agent_id: str,
@@ -25,29 +91,31 @@ class UniversalAgent(BaseAgent):
         broadcast_func: Optional[Any] = None,
         knowledge: str = ""
     ):
-        # Universal agents don't use a fixed skills_path
-        # We pass a dummy path or None, and override _load_skills
         super().__init__(
             agent_id=agent_id,
             name=name,
             mcp_server=mcp_server,
             ha_client=ha_client,
-            skills_path="UNIVERSAL_AGENT", 
+            skills_path="UNIVERSAL_AGENT",
             rag_manager=rag_manager,
             model_name=model_name,
             decision_interval=decision_interval,
-            broadcast_func=broadcast_func
+            broadcast_func=broadcast_func,
         )
         self.instruction = instruction
         self.entities = entities
         self.knowledge = knowledge
 
+        # Entity discovery cache
+        self._discovered_entities: List[str] = []
+        self._entity_cache_expires: Optional[datetime] = None
+
+    # ------------------------------------------------------------------
+    # Skills prompt
+    # ------------------------------------------------------------------
+
     def _load_skills(self) -> str:
-        """
-        Override: Load skills from the instruction string provided in config
-        instead of a markdown file.
-        """
-        prompt = f"""
+        return f"""
 # AGENT ROLE: {self.name}
 # TARGET ENTITIES: {', '.join(self.entities) if self.entities else 'Dynamic/All'}
 
@@ -62,162 +130,177 @@ class UniversalAgent(BaseAgent):
 2. ACCESS RESTRICTIONS: You CANNOT access 'shell_command', 'hassio', 'script', or 'automation' domains.
 3. APPROVAL REQUIRED: High-impact actions (e.g., unlocking doors, disarming alarms) will be queued for human approval.
 4. VALIDATION: Generic service calls (e.g. set_temperature) must still adhere to safety limits (10-30°C).
-        """
-        return prompt
+"""
+
+    # ------------------------------------------------------------------
+    # Entity discovery (with caching)
+    # ------------------------------------------------------------------
+
+    def _is_cache_valid(self) -> bool:
+        return (
+            bool(self._discovered_entities)
+            and self._entity_cache_expires is not None
+            and datetime.now() < self._entity_cache_expires
+        )
+
+    def _update_cache(self, entities: List[str]):
+        self._discovered_entities = entities
+        self._entity_cache_expires = datetime.now() + _ENTITY_CACHE_TTL
 
     async def _get_state_description(self) -> str:
         """
-        Get state of assigned entities.
+        Build a state description for the LLM.
+
+        If self.entities is populated (from agents.yaml), fetch only those.
+        If empty (dynamic mode), use RAG or domain-filtered heuristic discovery,
+        with results cached for 5 minutes to avoid hammering HA on every cycle.
         """
-        states = []
-        if not self.entities:
-            # Dynamic mode: find relevant entities
-            try:
-                # 1. Try Semantic Search if RAG is available
-                if self.rag_manager:
+        states: List[str] = []
+
+        # ---- Static entity list ----------------------------------------
+        if self.entities:
+            states.append("Configured Entity States:")
+            for eid in self.entities:
+                try:
+                    s = await self.ha_client.get_states(eid)
+                    if s:
+                        friendly = s.get("attributes", {}).get("friendly_name", eid)
+                        states.append(f"- {friendly} ({eid}): {s['state']}")
+                except Exception as e:
+                    states.append(f"- {eid}: [error fetching state: {e}]")
+            states.append(f"- Time: {datetime.now().strftime('%H:%M')}")
+            return "\n".join(states)
+
+        # ---- Dynamic discovery -----------------------------------------
+        try:
+            # 1. Serve from cache if still fresh
+            if self._is_cache_valid():
+                states.append("Cached Entity Discovery:")
+                for eid in self._discovered_entities:
                     try:
-                        print(f"🔍 Performing semantic entity search for instruction: '{self.instruction}'")
-                        
-                        # run_in_executor to prevent blocking the event loop (which kills HA connection)
-                        import asyncio
-                        loop = asyncio.get_running_loop()
-                        
-                        # Define wrapper for sync RAG call
-                        def _run_rag():
-                            return self.rag_manager.query(
-                                query_text=self.instruction,
-                                collection_names=["entity_registry"],
-                                n_results=10
-                            )
-                        
-                        # Execute in thread pool
-                        rag_results = await loop.run_in_executor(None, _run_rag)
-                        
-                        if rag_results:
-                            found_entities = []
-                            for res in rag_results:
-                                # Parse entity_id from content or metadata
-                                # Content format usually: "Entity: light.foo (Friendly Name) - Domain: light..."
-                                content = res.get("content", "")
-                                
-                                # Ignore if content looks like an error message
-                                if "nomic-embed-text" in content or "error" in content.lower():
-                                    print(f"⚠️ RAG Result contained error pattern, ignoring: {content}")
-                                    continue
-
-                                # Simple extraction heuristic: look for domain.name pattern in content
-                                import re
-                                match = re.search(r"Entity: ([a-z0-9_]+\.[a-z0-9_]+)", content)
-                                if match:
-                                    found_entities.append(match.group(1))
-                            
-                            if found_entities:
-                                self.entities = found_entities # Cache them for this run? Or keep dynamic?
-                                # Keeping it dynamic is better for changing conditions, but let's use them now
-                                states.append(f"Semantic Entity Discovery (Instruction-based):")
-                                for eid in found_entities:
-                                    try:
-                                        s = await self.ha_client.get_states(eid)
-                                        if s:
-                                            friendly = s.get('attributes', {}).get('friendly_name', eid)
-                                            states.append(f"- {friendly} ({eid}): {s['state']}")
-                                    except:
-                                        pass
-                                
-                                # If we found good semantic matches, return early + some globals
-                                # Add time/sun context
-                                states.append(f"- Time: {datetime.now().strftime('%H:%M')}")
-                                return "\n".join(states)
-                                
-                    except Exception as rag_err:
-                        print(f"⚠️ Semantic Search Failed (Falling back to heuristic): {rag_err}")
-                        # Fall through to heuristic...
-
-                # 2. Fallback to Heuristic Discovery (if RAG failed or found nothing)
-                all_states = await self.ha_client.get_states()
-                
-                # Prioritize controllable domains
-                control_domains = ["climate", "light", "switch", "lock", "cover"]
-                sensor_domains = ["sensor", "binary_sensor"]
-                
-                sorted_states = sorted(
-                    all_states,
-                    key=lambda x: (
-                        0 if x['entity_id'].split('.')[0] in control_domains else 1,
-                        x['entity_id']
-                    )
-                )
-
-                # Filter and take first 50
-                filtered = [
-                    s for s in sorted_states
-                    if s['entity_id'].split('.')[0] in (control_domains + sensor_domains)
-                ][:50]
-                
-                states.append("Dynamic Entity Discovery (Fallback Heuristic):")
-                for s in filtered:
-                    eid = s['entity_id']
-                    friendly = s.get('attributes', {}).get('friendly_name', eid)
-                    val = s['state']
-                    states.append(f"- {friendly} ({eid}): {val}")
-                    
+                        s = await self.ha_client.get_states(eid)
+                        if s:
+                            friendly = s.get("attributes", {}).get("friendly_name", eid)
+                            states.append(f"- {friendly} ({eid}): {s['state']}")
+                    except Exception:
+                        pass
+                states.append(f"- Time: {datetime.now().strftime('%H:%M')}")
                 return "\n".join(states)
-            except Exception as e:
-                # If everything fails (including HA client), return empty to avoid breaking the agent completely
-                # but log the specific error
-                if self.ha_client and not self.ha_client.connected:
-                    print(f"⚠️ Entity Discovery Paused (HA Client Disconnected)")
-                else:
-                    print(f"❌ Entity Discovery Fatal Error: {e}")
-                return "Error: Could not discover entities. Please check Home Assistant connection."
 
-        # ... (rest of method unchanged)
+            # 2. Try RAG semantic search
+            if self.rag_manager:
+                try:
+                    logger.info(f"🔍 Semantic entity search: '{self.instruction[:60]}...'")
+                    loop = asyncio.get_running_loop()
+
+                    def _run_rag():
+                        return self.rag_manager.query(
+                            query_text=self.instruction,
+                            collection_names=["entity_registry"],
+                            n_results=10,
+                        )
+
+                    rag_results = await loop.run_in_executor(None, _run_rag)
+
+                    found_entities: List[str] = []
+                    for res in (rag_results or []):
+                        content = res.get("content", "")
+                        if "nomic-embed-text" in content or "error" in content.lower():
+                            continue
+                        match = re.search(r"Entity: ([a-z0-9_]+\.[a-z0-9_]+)", content)
+                        if match:
+                            found_entities.append(match.group(1))
+
+                    if found_entities:
+                        self._update_cache(found_entities)
+                        states.append("Semantic Entity Discovery:")
+                        for eid in found_entities:
+                            try:
+                                s = await self.ha_client.get_states(eid)
+                                if s:
+                                    friendly = s.get("attributes", {}).get("friendly_name", eid)
+                                    states.append(f"- {friendly} ({eid}): {s['state']}")
+                            except Exception:
+                                pass
+                        states.append(f"- Time: {datetime.now().strftime('%H:%M')}")
+                        return "\n".join(states)
+
+                except Exception as rag_err:
+                    logger.warning(f"⚠️ Semantic search failed, falling back to heuristic: {rag_err}")
+
+            # 3. Heuristic fallback — domain-filtered, capped at 20 entities
+            #    Infer relevant domains from instruction keywords to avoid loading
+            #    all 2600+ entities on every cycle.
+            target_domains = _infer_domains_from_instruction(self.instruction) or _ALL_INTERESTING
+
+            all_states = await self.ha_client.get_states()
+
+            # Filter by domain, sort controllable first
+            def _priority(s):
+                dom = s["entity_id"].split(".")[0]
+                return (0 if dom in _CONTROL_DOMAINS else 1, s["entity_id"])
+
+            filtered = sorted(
+                [s for s in all_states if s["entity_id"].split(".")[0] in target_domains],
+                key=_priority,
+            )[:20]   # cap at 20 — keeps LLM context small
+
+            discovered_ids = [s["entity_id"] for s in filtered]
+            self._update_cache(discovered_ids)
+
+            states.append(f"Heuristic Entity Discovery (domains: {', '.join(target_domains)}):")
+            for s in filtered:
+                eid = s["entity_id"]
+                friendly = s.get("attributes", {}).get("friendly_name", eid)
+                states.append(f"- {friendly} ({eid}): {s['state']}")
+
+            states.append(f"- Time: {datetime.now().strftime('%H:%M')}")
+            return "\n".join(states)
+
+        except Exception as e:
+            if self.ha_client and not self.ha_client.connected:
+                logger.warning("⚠️ Entity discovery paused — HA client disconnected")
+            else:
+                logger.error(f"❌ Entity discovery fatal error: {e}")
+            return "Error: Could not discover entities. Please check Home Assistant connection."
+
+    # ------------------------------------------------------------------
+    # Context gathering
+    # ------------------------------------------------------------------
 
     async def gather_context(self) -> Dict:
-        """
-        Gather current context for universal agent.
-        Uses _get_state_description helper.
-        """
         state_desc = await self._get_state_description()
-        
         return {
             "timestamp": datetime.now().isoformat(),
             "state_description": state_desc,
-            "instruction": self.instruction
+            "instruction": self.instruction,
         }
 
+    # ------------------------------------------------------------------
+    # Decision
+    # ------------------------------------------------------------------
+
     async def decide(self, context: Dict) -> Dict:
-        """
-        Make decision based on instruction and current state.
-        """
-        # 1. Discover relevant services based on entities
+        """Make decision based on instruction and current state."""
+
+        # Discover relevant services for the current entity set
         relevant_services_text = ""
         try:
-            if self.entities:
-                # Extract unique domains
-                domains = set([e.split('.')[0] for e in self.entities])
-                
-                # Fetch all services
+            active_entities = self.entities or self._discovered_entities
+            if active_entities:
+                domains = set(e.split(".")[0] for e in active_entities)
                 all_services = await self.ha_client.get_services()
-                
-                # Filter for our domains
-                found_services = []
+                lines = []
                 for domain in domains:
                     if domain in all_services:
-                        services = all_services[domain]
-                        # Just list service names, maybe descriptions if brief
-                        # To save token space, just list names: "climate.set_temperature, climate.turn_on"
-                        s_names = list(services.keys())
-                        found_services.append(f"- {domain}: {', '.join(s_names)}")
-                
-                if found_services:
-                    relevant_services_text = "\nAVAILABLE HA SERVICES (Use these EXACT names):\n" + "\n".join(found_services)
+                        lines.append(f"- {domain}: {', '.join(all_services[domain].keys())}")
+                if lines:
+                    relevant_services_text = "\nAVAILABLE HA SERVICES (Use EXACT names):\n" + "\n".join(lines)
         except Exception as e:
-            print(f"⚠️ Failed to fetch services: {e}")
+            logger.warning(f"⚠️ Failed to fetch services: {e}")
 
-        # Build prompt
         state_desc = context.get("state_description", "No state data")
-        
+
         prompt = f"""
 {self._load_skills()}
 
@@ -232,85 +315,55 @@ ENTITY STATES:
 CRITICAL RULES:
 1. You MUST ONLY use entity IDs listed in 'ENTITY STATES'. Do NOT guess or hallucinate IDs.
 2. If the entity you need is not listed, use the 'log' tool to report "Entity X not found".
-3. Use 'call_ha_service' only for generic services. For climate/lights, prefer specialized tools like 'set_temperature' if available.
-4. Respond with VALID STANDARD JSON only. NO COMMENTS (// or /*) allowed inside the JSON.
-5. Do not add markdown blocks.
+3. Use 'call_ha_service' only for generic services. For climate/lights, prefer specialized tools.
+4. Respond with VALID STANDARD JSON only. NO COMMENTS (// or /*) inside JSON.
+5. Do not wrap in markdown blocks.
 
 TOOL USAGE EXAMPLES:
-- Correct (Specific): {{"tool": "set_temperature", "parameters": {{"entity_id": "climate.ethan", "temperature": 21.0}}}}
-- Correct (Generic): {{"tool": "call_ha_service", "parameters": {{"domain": "light", "service": "turn_on", "entity_id": "light.living_room", "service_data": {{"brightness_pct": 50}}}}}}
-- Incorrect (Wrong Tool): {{"tool": "call_ha_service", "parameters": {{"entity_id": "climate.ethan", "service": "set_target_temp", "new_temperature": 10}}}} -> There is NO 'set_target_temp' service. Use 'set_temperature' tool.
-- Incorrect (Missing Domain): {{"tool": "call_ha_service", "parameters": {{"service": "turn_on", "entity_id": "light.foo"}}}} -> missing "domain": "light"
+- Specific: {{"tool": "set_temperature", "parameters": {{"entity_id": "climate.lounge", "temperature": 21.0}}}}
+- Generic: {{"tool": "call_ha_service", "parameters": {{"domain": "light", "service": "turn_on", "entity_id": "light.living_room", "service_data": {{"brightness_pct": 50}}}}}}
+- Voice:   {{"tool": "speak_tts", "parameters": {{"message": "Good morning!", "media_player": "media_player.kitchen_display"}}}}
 
-Based on your PRIMARY INSTRUCTION and the CURRENT SITUATION, determine if any action is needed.
+Based on your PRIMARY INSTRUCTION and CURRENT SITUATION, determine if any action is needed.
 Respond with a JSON object containing 'reasoning' and 'actions'.
-Each action MUST have a 'tool' field (e.g. "set_temperature") and 'parameters'.
+Each action MUST have a 'tool' field and 'parameters'.
 """
-        # Call LLM
         response = await self._call_llm(prompt)
-        
-        # 1. Handle explicit errors from BaseAgent
-        if response.startswith("ERROR:"):
-            return {
-                "reasoning": f"LLM Communication Failure: {response[6:].strip()}",
-                "actions": []
-            }
-            
-        if not response.strip():
-            return {
-                "reasoning": "LLM returned an empty response. Ensure the model is running.",
-                "actions": []
-            }
 
-        # 2. Parse response (reuse basic parsing logic if available, or simple json load)
+        if response.startswith("ERROR:"):
+            return {"reasoning": f"LLM failure: {response[6:].strip()}", "actions": []}
+
+        if not response.strip():
+            return {"reasoning": "LLM returned empty response.", "actions": []}
+
         try:
-            # Simple cleanup for markdown
-            clean_response = response.strip()
-            if clean_response.startswith("```"):
-                clean_response = clean_response.split("\n", 1)[1]
-                if clean_response.endswith("```"):
-                    clean_response = clean_response.rsplit("\n", 1)[0]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-            
-            # Helper to try fixing common JSON errors (comments, trailing commas)
-            def loose_json_parse(text):
-                import re
-                # 1. Strip C-style comments (// and /* */)
-                # Remove // comments
-                text = re.sub(r'//.*', '', text)
-                # Remove /* */ comments
-                text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-                
+            clean = response.strip()
+            # Strip markdown code fences if present
+            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+            clean = re.sub(r"\s*```$", "", clean)
+
+            def _loose_json(text: str):
+                text = re.sub(r"//.*", "", text)
+                text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
                 try:
                     return json.loads(text)
                 except json.JSONDecodeError:
-                    # 2. Try removing trailing commas
-                    text = re.sub(r',\s*}', '}', text)
-                    text = re.sub(r',\s*]', ']', text)
+                    text = re.sub(r",\s*}", "}", text)
+                    text = re.sub(r",\s*]", "]", text)
                     return json.loads(text)
-            
-            data = loose_json_parse(clean_response)
-            
-            # Validate actions structure
+
+            data = _loose_json(clean)
+
             valid_actions = []
-            if "actions" in data and isinstance(data["actions"], list):
-                for action in data["actions"]:
-                    if "tool" in action:
-                        valid_actions.append(action)
-                    elif "service" in action: # Handle common hallucination
-                        valid_actions.append({
-                            "tool": "call_ha_service",
-                            "parameters": action
-                        })
-            
+            for action in data.get("actions", []):
+                if "tool" in action:
+                    valid_actions.append(action)
+                elif "service" in action:
+                    valid_actions.append({"tool": "call_ha_service", "parameters": action})
+
             data["actions"] = valid_actions
             return data
-            
-        except Exception as e:
-            print(f"❌ JSON Parse Error on '{response}': {e}") # Log full response for debug
-            return {
-                "reasoning": f"Failed to parse LLM response: {e}. Raw response logged.",
-                "actions": []
-            }
 
+        except Exception as e:
+            logger.error(f"❌ JSON parse error: {e}\nRaw: {response[:200]}")
+            return {"reasoning": f"Failed to parse LLM response: {e}", "actions": []}
