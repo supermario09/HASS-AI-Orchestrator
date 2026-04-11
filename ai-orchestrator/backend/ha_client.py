@@ -131,9 +131,10 @@ class HAWebSocketClient:
 
     async def wait_until_connected(self, timeout: float = 30.0) -> bool:
         """Wait until connection is established or timeout occurs"""
-        start = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        start = loop.time()
         while not self.connected:
-            if asyncio.get_event_loop().time() - start > timeout:
+            if loop.time() - start > timeout:
                 return False
             await asyncio.sleep(0.5)
         return True
@@ -168,12 +169,18 @@ class HAWebSocketClient:
                 # Handle subscription events
                 if data["type"] == "event" and data.get("id") in self.subscriptions:
                     callback = self.subscriptions[data["id"]]
-                    await callback(data["event"])
+                    try:
+                        await callback(data["event"])
+                    except Exception as cb_exc:
+                        # Never let a bad callback kill the message receiver loop
+                        logger.error(f"❌ Subscription callback error: {cb_exc}")
 
                 # Handle command responses
                 elif data.get("id") in self.pending_responses:
                     future = self.pending_responses.pop(data["id"])
-                    future.set_result(data)
+                    # Guard against race: future may already be done if wait_for timed out
+                    if not future.done():
+                        future.set_result(data)
 
         except (websockets.exceptions.ConnectionClosed,
                 websockets.exceptions.InvalidState):
@@ -237,7 +244,7 @@ class HAWebSocketClient:
         try:
             msg_id = await self._send_message({"type": "get_states"})
 
-            future: asyncio.Future = asyncio.get_event_loop().create_future()
+            future: asyncio.Future = asyncio.get_running_loop().create_future()
             self.pending_responses[msg_id] = future
             try:
                 result = await asyncio.wait_for(future, timeout=timeout)
@@ -282,7 +289,7 @@ class HAWebSocketClient:
         """Get all available services from Home Assistant."""
         msg_id = await self._send_message({"type": "get_services"})
 
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_responses[msg_id] = future
         try:
             result = await asyncio.wait_for(future, timeout=10.0)
@@ -325,7 +332,7 @@ class HAWebSocketClient:
             "service_data": service_data,
         })
 
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_responses[msg_id] = future
         result = await asyncio.wait_for(future, timeout=10.0)
 
@@ -355,7 +362,7 @@ class HAWebSocketClient:
 
         self.subscriptions[msg_id] = filtered_callback
 
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_responses[msg_id] = future
         result = await asyncio.wait_for(future, timeout=10.0)
 

@@ -155,7 +155,12 @@ class VisionAgent:
                 "3. Should I alert the household? (yes/no and why)\n"
                 "Keep your response under 100 words."
             )
-            response = self._vision_model.generate_content([prompt, image])
+            # generate_content is synchronous — run in thread to avoid blocking
+            # the event loop (which would stall WebSocket keepalives)
+            response = await asyncio.to_thread(
+                self._vision_model.generate_content,
+                [prompt, image],
+            )
             return response.text.strip()
         except Exception as e:
             err_str = str(e)

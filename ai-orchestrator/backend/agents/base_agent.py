@@ -152,17 +152,21 @@ class BaseAgent(ABC):
             Generated text
         """
         try:
-            response = self.ollama_client.chat(
+            # Run synchronous ollama.Client.chat() in a thread to avoid
+            # blocking the asyncio event loop (which would stall WebSocket
+            # keepalives and cause disconnections from HA).
+            response = await asyncio.to_thread(
+                self.ollama_client.chat,
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 options={
                     "temperature": temperature,
                     "num_predict": max_tokens,
-                    "think": False  # Disable internal reasoning tags (Issue #12)
+                    "think": False,
                 },
-                stream=False
+                stream=False,
             )
-            
+
             content = response["message"]["content"]
             
             # Strip any remaining <think>...</think> blocks (Issue #12 failsafe)

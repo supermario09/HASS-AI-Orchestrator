@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -921,10 +922,11 @@ class MCPServer:
             import io
             image = PIL.Image.open(io.BytesIO(image_bytes))
 
-            response = model.generate_content([
-                f"Camera: {entity_id}\nQuestion: {question}",
-                image,
-            ])
+            # generate_content is synchronous — run in thread to avoid blocking event loop
+            response = await asyncio.to_thread(
+                model.generate_content,
+                [f"Camera: {entity_id}\nQuestion: {question}", image],
+            )
             analysis = response.text.strip()
 
             logger.info(f"📷 Vision analysis for {entity_id}: {analysis[:100]}...")

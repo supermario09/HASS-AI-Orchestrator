@@ -238,15 +238,16 @@ class Orchestrator:
         # Build planning prompt
         prompt = self._build_planning_prompt(home_state)
         
-        # Call LLM for high-level planning
+        # Call LLM for high-level planning — run in thread to avoid blocking event loop
         try:
-            response = self.llm_client.chat(
+            response = await asyncio.to_thread(
+                self.llm_client.chat,
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "You are an AI orchestrator for home automation. Analyze the current home state and create tasks for specialist agents (heating, cooling, lighting, security)."},
                     {"role": "user", "content": prompt}
                 ],
-                format="json"
+                format="json",
             )
             
             plan = json.loads(response["message"]["content"])
@@ -492,12 +493,13 @@ INSTRUCTIONS:
 5. NO COMMENTS in JSON.
 """
 
-        # 3. Call LLM
+        # 3. Call LLM — run in thread to avoid blocking the event loop
         try:
-            response = self.llm_client.chat(
+            response = await asyncio.to_thread(
+                self.llm_client.chat,
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
-                format="json"
+                format="json",
             )
             content = response["message"]["content"]
         except Exception as e:
@@ -629,18 +631,22 @@ OUTPUT REQUIREMENTS:
         html_content = ""
         try:
             if self.gemini_model and self.use_gemini_for_dashboard:
-                # Use Gemini for best design results
+                # Use Gemini — run in thread (generate_content is synchronous)
                 logger.info(f"Generating dashboard using Gemini model: {self.gemini_model_name}")
-                response = self.gemini_model.generate_content([system_prompt, user_prompt])
+                response = await asyncio.to_thread(
+                    self.gemini_model.generate_content,
+                    [system_prompt, user_prompt],
+                )
                 html_content = response.text
             else:
-                # Fallback to local Ollama (might be less 'poppy' but functional)
-                response = self.llm_client.chat(
+                # Fallback to local Ollama — run in thread (chat is synchronous)
+                response = await asyncio.to_thread(
+                    self.llm_client.chat,
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ]
+                        {"role": "user", "content": user_prompt},
+                    ],
                 )
                 html_content = response["message"]["content"]
             
