@@ -127,17 +127,19 @@ class KnowledgeBase:
                     skipped += 1
                     continue
 
-                # Add to vector store
-                self.rag.add_document(
-                    text=desc,
-                    collection_name="entity_registry",
-                    metadata={
+                # Add to vector store — offload to thread so blocking embedding
+                # call (ollama.embeddings) doesn't freeze the asyncio event loop
+                await asyncio.to_thread(
+                    self.rag.add_document,
+                    desc,
+                    "entity_registry",
+                    {
                         "entity_id": entity_id,
                         "domain": domain,
                         "last_updated": datetime.now().isoformat(),
-                        "desc_hash": desc_hash
+                        "desc_hash": desc_hash,
                     },
-                    doc_id=doc_id
+                    doc_id,
                 )
                 count += 1
                 

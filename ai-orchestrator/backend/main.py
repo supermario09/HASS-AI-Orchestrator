@@ -276,20 +276,29 @@ async def lifespan(app: FastAPI):
     print(f"✓ HA Client configured (URL: {ha_url})")
 
     # 3. Initialize RAG & Knowledge Base (Phase 3)
-    enable_rag = os.getenv("ENABLE_RAG", "true").lower() == "true"
+    # RAG is disabled by default — it requires the `nomic-embed-text` Ollama model and
+    # blocks the event loop with synchronous embedding calls during ingestion.
+    # Set ENABLE_RAG=true to opt in only if you have nomic-embed-text pulled.
+    enable_rag = os.getenv("ENABLE_RAG", "false").lower() == "true"
     if enable_rag:
         try:
-            rag_manager = RagManager(persist_dir="/data/chroma", disable_telemetry=disable_telemetry)
+            rag_manager = await asyncio.to_thread(
+                RagManager, persist_dir="/data/chroma", disable_telemetry=disable_telemetry
+            )
             # FIX: Pass lambda to resolve the global ha_client at runtime, not now (which is None)
             knowledge_base = KnowledgeBase(rag_manager, lambda: ha_client)
             print("✓ RAG Manager & Knowledge Base initialized")
-            
-            # Start background ingestion
-            asyncio.create_task(knowledge_base.ingest_ha_registry())
-            asyncio.create_task(knowledge_base.ingest_manuals())
+
+            # Start background ingestion — runs after a short delay so startup completes first
+            async def _delayed_ingest():
+                await asyncio.sleep(60)
+                await knowledge_base.ingest_ha_registry()
+            asyncio.create_task(_delayed_ingest())
         except Exception as e:
-            print(f"⚠️ RAG initialization failed: {e}")
+            print(f"⚠️ RAG initialization failed (continuing without RAG): {e}")
             rag_manager = None
+    else:
+        print("ℹ️ RAG disabled (set ENABLE_RAG=true to enable ChromaDB semantic search)")
 
     # 4. Initialize MCP server
     # FIX: Pass lambda for lazy resolution
@@ -395,8 +404,8 @@ async def lifespan(app: FastAPI):
         mcp_server=mcp_server,
         approval_queue=approval_queue,
         agents=agents,
-        model_name=os.getenv("ORCHESTRATOR_MODEL", "deepseek-r1:8b"),
-        planning_interval=int(os.getenv("DECISION_INTERVAL", "120")),
+        model_name=os.getenv("ORCHESTRATOR_MODEL", "mistral:7b-instruct"),
+        planning_interval=int(os.getenv("DECISION_INTERVAL", "300")),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         gemini_api_key=gemini_api_key_opt or os.getenv("GEMINI_API_KEY"),
         use_gemini_for_dashboard=use_gemini_dashboard_opt or os.getenv("USE_GEMINI_FOR_DASHBOARD", "false").lower() == "true",
@@ -410,10 +419,24 @@ async def lifespan(app: FastAPI):
     print("✓ Orchestration & Dashboard loops started")
     
     # 7.5 Start Specialist Agent Loops (Autonomous Mode)
-    for agent_id, agent in agents.items():
+    # Stagger startup by 30s per agent to avoid thundering-herd Ollama calls at boot.
+    import random
+    for i, (agent_id, agent) in enumerate(agents.items()):
         if hasattr(agent, "run_decision_loop") and getattr(agent, "decision_interval", 0) > 0:
-            asyncio.create_task(agent.run_decision_loop())
-            print(f"✓ Started decision loop for {agent_id}")
+            stagger_delay = i * 30  # 0s, 30s, 60s, 90s … per agent
+
+            async def _start_agent_loop(a=agent, aid=agent_id, delay=stagger_delay):
+                if delay:
+                    await asyncio.sleep(delay)
+                while True:
+                    try:
+                        await a.run_decision_loop()
+                    except Exception as exc:
+                        logger.error(f"❌ Agent '{aid}' loop crashed: {exc}. Restarting in 60s…")
+                        await asyncio.sleep(60)
+
+            asyncio.create_task(_start_agent_loop())
+            print(f"✓ Scheduled decision loop for {agent_id} (starts in {stagger_delay}s)")
     
     # 8. Initialize Architect (Phase 6)
     architect = ArchitectAgent(lambda: ha_client, rag_manager=rag_manager)

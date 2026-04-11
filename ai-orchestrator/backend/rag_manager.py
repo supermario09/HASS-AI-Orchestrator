@@ -64,13 +64,12 @@ class RagManager:
         logger.info(f"RAG Manager initialized at {persist_dir} using {embedding_model}")
 
     def _generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding using Ollama"""
+        """Generate embedding using Ollama (synchronous — call via asyncio.to_thread in async contexts)"""
         try:
             response = ollama.embeddings(model=self.embedding_model, prompt=text)
             return response["embedding"]
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
-            # Return zero vector fallback or raise
             raise
 
     def add_document(

@@ -31,8 +31,8 @@ jq_or_default() {
 export OLLAMA_HOST=$(jq_or_default '.ollama_host' "http://localhost:11434")
 export DRY_RUN_MODE=$(jq_or_default '.dry_run_mode' "true")
 export LOG_LEVEL=$(jq_or_default '.log_level' "info" | tr '[:lower:]' '[:upper:]')
-export ORCHESTRATOR_MODEL=$(jq_or_default '.orchestrator_model' "deepseek-r1:8b")
-export SMART_MODEL=$(jq_or_default '.smart_model' "deepseek-r1:8b")
+export ORCHESTRATOR_MODEL=$(jq_or_default '.orchestrator_model' "mistral:7b-instruct")
+export SMART_MODEL=$(jq_or_default '.smart_model' "mistral:7b-instruct")
 export FAST_MODEL=$(jq_or_default '.fast_model' "mistral:7b-instruct")
 export DECISION_INTERVAL=$(jq_or_default '.decision_interval' "120")
 export ENABLE_GPU=$(jq_or_default '.enable_gpu' "false")
@@ -46,7 +46,7 @@ export MAX_TEMP=$(jq_or_default '.max_temp' "30.0")
 export MAX_TEMP_CHANGE=$(jq_or_default '.max_temp_change' "3.0")
 export GEMINI_API_KEY=$(jq_or_default '.gemini_api_key' "")
 export USE_GEMINI_FOR_DASHBOARD=$(jq_or_default '.use_gemini_for_dashboard' "false")
-export GEMINI_MODEL_NAME=$(jq_or_default '.gemini_model_name' "gemini-1.5-pro")
+export GEMINI_MODEL_NAME=$(jq_or_default '.gemini_model_name' "gemini-robotics-er-1.5-preview")
 
 # Home Assistant API configuration
 export SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN}"
@@ -64,16 +64,12 @@ echo "  Decision Interval: ${DECISION_INTERVAL}s"
 echo "  GPU Enabled: $ENABLE_GPU"
 if [ -n "$HA_ACCESS_TOKEN" ]; then
     echo "  HA Access Token: PROVIDED (Length: ${#HA_ACCESS_TOKEN})"
-    # Switch to Direct Core Access to bypass Supervisor Proxy issues ONLY if still using default proxy URL
-    if [ "$HA_URL" == "http://supervisor/core" ]; then
-        export HA_URL="http://homeassistant:8123"
-        echo "  > Switching to Direct Core Access: $HA_URL"
-    else
-        echo "  > Using custom HA URL: $HA_URL"
-    fi
 else
     echo "  HA Access Token: NOT PROVIDED (Using Supervisor Token fallback)"
 fi
+# NOTE: HA URL routing is handled by main.py based on SUPERVISOR_TOKEN presence.
+# When SUPERVISOR_TOKEN is set, main.py uses http://supervisor/core (the proxy).
+echo "  HA URL (raw): $HA_URL"
 
 # Start Ollama server if using localhost
 if [[ "$OLLAMA_HOST" == *"localhost"* ]] || [[ "$OLLAMA_HOST" == *"127.0.0.1"* ]]; then

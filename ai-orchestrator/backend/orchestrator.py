@@ -41,7 +41,7 @@ class Orchestrator:
         mcp_server,
         approval_queue,
         agents: Dict[str, any],
-        model_name: str = "deepseek-r1:8b",
+        model_name: str = "mistral:7b-instruct",
         planning_interval: int = 120,
         ollama_host: str = "http://localhost:11434",
         gemini_api_key: Optional[str] = None,
@@ -163,8 +163,8 @@ class Orchestrator:
     async def run_dashboard_refresh_loop(self):
         """Periodically refresh the visual dashboard with latest states"""
         logger.info(f"Starting dashboard refresh loop (interval: {self.dashboard_refresh_interval}s)")
-        # Small delay to let system initialize
-        await asyncio.sleep(10)
+        # Wait for system to stabilize before first refresh
+        await asyncio.sleep(120)
         
         while True:
             try:
