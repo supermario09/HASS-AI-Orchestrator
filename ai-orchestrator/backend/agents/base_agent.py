@@ -162,47 +162,77 @@ class BaseAgent(ABC):
         self,
         prompt: str,
         temperature: float = 0.7,
-        max_tokens: int = 1000
+        max_tokens: int = 500,
     ) -> str:
         """
-        Call Ollama LLM with streaming.
-        
+        Call Ollama LLM (non-blocking, serialised, with automatic retry).
+
+        Runs inside asyncio.to_thread() so the event loop is never blocked.
+        Uses the global LLM semaphore to prevent concurrent Ollama calls from
+        thundering-herd-ing the model on slow hardware.
+
+        Retries up to 3 times on empty response or transient errors, releasing
+        the semaphore between attempts so other agents can proceed during backoff.
+
         Args:
-            prompt: Prompt text
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
-        
-        Returns:
-            Generated text
+            prompt:      Prompt text
+            temperature: Sampling temperature (lower = more deterministic)
+            max_tokens:  Maximum tokens to generate (default 500 — keeps
+                         responses short on slow/low-RAM hardware)
         """
-        try:
-            # Acquire the global LLM semaphore to serialise Ollama calls.
-            # Multiple agents running concurrently would otherwise all call
-            # chat() simultaneously, overwhelming Ollama and causing timeouts.
-            async with _get_llm_semaphore():
-                response = await asyncio.to_thread(
-                    self.ollama_client.chat,
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    options={
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
-                        "think": False,
-                    },
-                    stream=False,
-                )
+        import re
 
-            content = response["message"]["content"]
+        _MAX_ATTEMPTS = 3
+        _RETRY_DELAYS = [5, 10]   # seconds before attempt 2 and 3
 
-            # Strip any remaining <think>...</think> blocks (Issue #12 failsafe)
-            import re
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        last_err: str = "unknown error"
 
-            return content.strip()
+        for attempt in range(_MAX_ATTEMPTS):
+            # Release semaphore between retries so other agents aren't blocked
+            # waiting behind a failing call.
+            if attempt > 0:
+                delay = _RETRY_DELAYS[attempt - 1]
+                print(f"⚠️ {self.name} LLM attempt {attempt} returned empty/error. "
+                      f"Retrying in {delay}s… ({attempt}/{_MAX_ATTEMPTS - 1})")
+                await asyncio.sleep(delay)
 
-        except Exception as e:
-            print(f"❌ LLM call failed: {e}")
-            return f"ERROR: {str(e)}"
+            try:
+                async with _get_llm_semaphore():
+                    response = await asyncio.to_thread(
+                        self.ollama_client.chat,
+                        model=self.model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        options={
+                            "temperature": temperature,
+                            "num_predict": max_tokens,
+                            # Limit context window — reduces VRAM/RAM on slow hardware
+                            # (Raspberry Pi, NUC) while still covering typical home-agent prompts.
+                            "num_ctx": 2048,
+                            "think": False,
+                        },
+                        stream=False,
+                    )
+
+                content = response["message"]["content"]
+
+                # Strip any remaining <think>...</think> blocks (Issue #12 failsafe)
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+                content = content.strip()
+
+                if not content:
+                    last_err = "LLM returned empty response"
+                    continue   # retry
+
+                return content
+
+            except Exception as e:
+                last_err = str(e)
+                print(f"❌ {self.name} LLM attempt {attempt + 1} failed: {e}")
+                # Loop continues → retries with delay above
+
+        # All attempts exhausted
+        print(f"❌ {self.name} LLM failed after {_MAX_ATTEMPTS} attempts: {last_err}")
+        return f"ERROR: {last_err}"
     
     def _build_system_prompt(self) -> str:
         """Build system prompt from SKILLS.md"""

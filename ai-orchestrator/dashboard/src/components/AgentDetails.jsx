@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Trash2, Edit2, Check, ExternalLink, Activity, Save, Plus, Search, Loader, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { X, Trash2, Edit2, Check, ExternalLink, Activity, Save, Plus, Search, Loader, ThumbsUp, ThumbsDown, Download } from 'lucide-react';
 
 // Domain colour map for entity chips
 const DOMAIN_COLOURS = {
@@ -257,9 +257,57 @@ const AgentDetails = ({ agent, onClose, onDelete }) => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ agent_id: agent.agent_id, timestamp, feedback: next }),
                 });
+                // Refresh stats after rating
+                fetchExportStats();
             } catch (e) {
                 console.error('Failed to submit feedback', e);
             }
+        }
+    };
+
+    // ── export ───────────────────────────────────────────────────────────────
+    const [exportStats, setExportStats]   = useState(null);   // {total, rated, up, down, unrated}
+    const [exporting, setExporting]       = useState(false);
+    const [exportFmt, setExportFmt]       = useState('jsonl'); // 'jsonl' | 'json' | 'csv'
+    const [exportFilter, setExportFilter] = useState('');      // '' | 'up' | 'down'
+
+    const fetchExportStats = async () => {
+        try {
+            const res  = await fetch(`api/decisions/export/stats?agent_id=${agent.agent_id}`);
+            const data = await res.json();
+            setExportStats(data);
+        } catch (_) {}
+    };
+
+    // Load stats whenever the history tab is opened
+    useEffect(() => {
+        if (activeTab === 'history') fetchExportStats();
+    }, [activeTab, agent?.agent_id]);
+
+    const handleExport = async () => {
+        setExporting(true);
+        try {
+            const params = new URLSearchParams({ fmt: exportFmt, agent_id: agent.agent_id });
+            if (exportFilter) params.set('feedback', exportFilter);
+            const res = await fetch(`api/decisions/export?${params}`);
+            if (!res.ok) {
+                const err = await res.json();
+                alert(err.detail || 'Export failed');
+                return;
+            }
+            // Trigger browser download
+            const blob = await res.blob();
+            const cd   = res.headers.get('Content-Disposition') || '';
+            const match = cd.match(/filename="([^"]+)"/);
+            const filename = match ? match[1] : `decisions_export.${exportFmt}`;
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url; a.download = filename; a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            alert(`Export error: ${e.message}`);
+        } finally {
+            setExporting(false);
         }
     };
 
@@ -600,6 +648,83 @@ const AgentDetails = ({ agent, onClose, onDelete }) => {
                     {/* ── HISTORY tab ── */}
                     {activeTab === 'history' && (
                         <div className="space-y-4">
+                            {/* ── Export panel ── */}
+                            <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Download size={15} className="text-blue-400" />
+                                        <span className="text-sm font-semibold text-white">Export for Fine-Tuning</span>
+                                    </div>
+                                    {/* Rated-decision stats badge */}
+                                    {exportStats && (
+                                        <div className="flex gap-2 text-xs">
+                                            <span className="px-2 py-0.5 rounded-full bg-green-500/15 border border-green-500/30 text-green-400">
+                                                <ThumbsUp size={9} className="inline mr-1" />{exportStats.up}
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-400">
+                                                <ThumbsDown size={9} className="inline mr-1" />{exportStats.down}
+                                            </span>
+                                            <span className="text-slate-500">{exportStats.unrated} unrated</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap gap-2 items-center">
+                                    {/* Filter selector */}
+                                    <div className="flex items-center gap-1 text-xs text-slate-400">
+                                        <span>Include:</span>
+                                        {[['', 'All rated'], ['up', 'Thumbs up only'], ['down', 'Thumbs down only']].map(([val, label]) => (
+                                            <button
+                                                key={val}
+                                                onClick={() => setExportFilter(val)}
+                                                className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${
+                                                    exportFilter === val
+                                                        ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+                                                        : 'border-slate-600 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                                                }`}
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {/* Format selector */}
+                                    <div className="flex items-center gap-1 text-xs text-slate-400 ml-auto">
+                                        <span>Format:</span>
+                                        {[['jsonl', 'JSONL'], ['json', 'JSON'], ['csv', 'CSV']].map(([val, label]) => (
+                                            <button
+                                                key={val}
+                                                onClick={() => setExportFmt(val)}
+                                                className={`px-2.5 py-1 rounded-lg border text-xs font-mono transition-colors ${
+                                                    exportFmt === val
+                                                        ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                                                        : 'border-slate-600 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                                                }`}
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3">
+                                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                                        JSONL exports in OpenAI fine-tuning format (system / user / assistant messages).
+                                        Use thumbs-up decisions as positive examples; thumbs-down for DPO / RLHF.
+                                    </p>
+                                    <button
+                                        onClick={handleExport}
+                                        disabled={exporting || (exportStats && exportStats.rated === 0)}
+                                        className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                                    >
+                                        {exporting
+                                            ? <><Loader size={13} className="animate-spin" /> Exporting…</>
+                                            : <><Download size={13} /> Download</>
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+
                             {/* Legend */}
                             <div className="flex items-center gap-3 text-xs text-slate-500 px-1">
                                 <ThumbsUp size={12} className="text-green-500" />

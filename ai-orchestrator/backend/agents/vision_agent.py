@@ -245,22 +245,43 @@ class VisionAgent:
             "Keep your response under 80 words."
         )
 
-        try:
-            async with _get_llm_semaphore():
-                response = await asyncio.to_thread(
-                    self._ollama_client.chat,
-                    model=self._ollama_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    options={"temperature": 0.3, "num_predict": 200, "think": False},
-                    stream=False,
+        import re
+        _MAX_ATTEMPTS = 3
+        _RETRY_DELAYS = [5, 10]
+
+        for attempt in range(_MAX_ATTEMPTS):
+            if attempt > 0:
+                delay = _RETRY_DELAYS[attempt - 1]
+                logger.warning(
+                    f"VisionAgent: Ollama attempt {attempt} empty/failed for {entity_id}. "
+                    f"Retrying in {delay}s…"
                 )
-            import re
-            content = response["message"]["content"]
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-            return content.strip()
-        except Exception as e:
-            logger.error(f"VisionAgent: Ollama fallback failed for {entity_id}: {e}")
-            return None
+                await asyncio.sleep(delay)
+
+            try:
+                async with _get_llm_semaphore():
+                    response = await asyncio.to_thread(
+                        self._ollama_client.chat,
+                        model=self._ollama_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        options={
+                            "temperature": 0.3,
+                            "num_predict": 200,
+                            "num_ctx": 2048,
+                            "think": False,
+                        },
+                        stream=False,
+                    )
+                content = response["message"]["content"]
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+                content = content.strip()
+                if content:
+                    return content
+            except Exception as e:
+                logger.error(f"VisionAgent: Ollama attempt {attempt + 1} failed for {entity_id}: {e}")
+
+        logger.error(f"VisionAgent: Ollama fallback gave up after {_MAX_ATTEMPTS} attempts for {entity_id}")
+        return None
 
     # ------------------------------------------------------------------
     # TTS announcement

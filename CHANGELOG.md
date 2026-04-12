@@ -1,6 +1,70 @@
 # Changelog
 <br>
 
+## [1.1.0] - 2026-04-12
+### Added
+- **Decision Export**: `GET /api/decisions/export` downloads rated decisions as JSONL (OpenAI fine-tuning format), JSON array, or CSV. Filter by `feedback=up|down` or all rated; scope by `agent_id`. Each JSONL row is a system/user/assistant message triple — ready to use directly with OpenAI fine-tuning or Axolotl/LLaMA-Factory.
+- **Export Stats**: `GET /api/decisions/export/stats` returns counts of rated/unrated/up/down decisions — shown in the History tab before downloading so you know how many training examples are available.
+- **Export UI**: History tab now shows a collapsible export panel with include-filter buttons (All rated / Thumbs up / Thumbs down), format selector (JSONL / JSON / CSV), live stat badges, and a Download button that triggers a browser file save.
+- **Tests** (31 new): full coverage of JSONL row structure, filtering logic, stats counting, format serialization, and validation guards (80 total across all test suites).
+<br>
+<br>
+
+## [1.0.9] - 2026-04-12
+### Added
+- **Entity Watchlist**: new sidebar tab ("Entity Watchlist") lets users pin any HA entity to monitor its live state. Cards group by domain with colour coding, show state prominently, expand to show attributes, and auto-refresh every 15s. Selections persist to localStorage.
+- **Decision Feedback**: thumbs-up/down buttons on every History tab decision card. Rating is written back into the decision JSON file on disk with a `feedback_at` timestamp. Card backgrounds tint green/red to confirm the selection. Ratings persist across restarts.
+- **`POST /api/decisions/feedback`**: saves thumbs-up/down to the correct decision file; validates `"up"` or `"down"` only; returns 404 if timestamp not found.
+### Fixed
+- **LLM serialization**: added a process-wide `asyncio.Semaphore(1)` in `base_agent.py` (`_get_llm_semaphore()`). All agents — including VisionAgent — now queue politely for Ollama. Previously all agents fired simultaneously at startup, overwhelming the model and causing cascading timeouts.
+- **VisionAgent Ollama fallback**: when Gemini is not configured, `analyze_camera()` now calls `_analyze_with_ollama_text()` which fetches the camera entity state + nearby binary_sensor/sensor states and asks the configured Ollama model to reason about activity. Previously the agent entered an infinite sleep loop when Gemini was unavailable.
+- **main.py**: passes `ollama_model` and `ollama_host` to VisionAgent constructor so the fallback model is configurable.
+- **Tests** (14 new): semaphore singleton, serialisation, `_call_llm` acquires semaphore before `to_thread`, concurrent calls queue correctly, Vision fallback routing, `to_thread` usage, loop no longer deadlocks, feedback file I/O, `feedback_at` timezone-aware, value validation.
+<br>
+<br>
+
+## [1.0.8] - 2026-04-12
+### Added
+- **Entity Manager UI**: "Entities" tab in the Agent Details panel lets users search all HA entities by ID or friendly name and add/remove them from any agent. Domain colour chips show entity type at a glance.
+- **`GET /api/entities`**: returns all HA entities with `entity_id`, `friendly_name`, `state`, `domain`. Accepts optional `?domain=` filter.
+- **`PATCH /api/factory/agents/{id}`**: accepts `{entities: [...]}` to update agent entity list; persists to `agents.yaml` and hot-reloads the in-memory agent immediately.
+- **Tests** (16 new): entity list filtering, domain filter, sorted output, friendly_name fallback, YAML entity persistence, unrelated fields untouched, hot-reload, edge cases (empty list, missing agent, missing file).
+<br>
+<br>
+
+## [1.0.7] - 2026-04-11
+### Fixed
+- **Timezone detection**: `main.py` queries `http://supervisor/core/api/config` at startup to detect the HA instance timezone, then calls `os.environ["TZ"] = tz; time.tzset()` to apply it to the running Python process. All `datetime.now()` calls (used for decision criteria like "is it evening?") now return correct local time.
+- **Timezone-aware timestamps**: all `datetime.now().isoformat()` calls across agents and analytics replaced with `datetime.now().astimezone().isoformat()`, producing strings like `2026-04-11T20:30:00+05:30`. JavaScript `new Date(ts).toLocaleTimeString()` then converts correctly in the browser.
+- **Analytics `_parse_ts()`**: new helper normalizes both naive and timezone-aware ISO strings to naive-local before comparison, eliminating `TypeError: can't compare offset-naive and offset-aware datetimes`.
+- **Tests** (7 new): aware timestamp format, `_parse_ts` naive/UTC/offset/invalid, mixed-type comparison safety, broadcast timestamp includes offset.
+<br>
+<br>
+
+## [1.0.6] - 2026-04-10
+### Fixed
+- **`asyncio.get_event_loop()` → `get_running_loop()`**: all 5 call sites in `ha_client.py` updated. Eliminates `DeprecationWarning` on Python 3.10+ and `RuntimeError` on 3.12+.
+- **Callback exception isolation**: `_receive_messages()` wraps each subscription callback in `try/except`. A misbehaving callback no longer crashes the receiver loop and breaks all subsequent HA state updates.
+- **Future done-guard**: `future.set_result()` is now guarded with `if not future.done()`. Prevents `asyncio.InvalidStateError` when HA sends a late response after a request timed out.
+- **Non-blocking LLM calls**: `ollama.Client.chat()` and `generate_content()` calls in `base_agent.py`, `vision_agent.py`, `mcp_server.py`, and `orchestrator.py` moved to `asyncio.to_thread()`. The event loop is no longer blocked during LLM inference.
+- **Tests** (12 new): `wait_until_connected`, `get_running_loop` usage, callback isolation, good callback still fires after bad one, late-response guard, cancelled-future guard, `to_thread` usage in `_call_llm`, non-blocking proof, orchestrator `plan()` + dashboard Ollama/Gemini paths.
+<br>
+<br>
+
+## [1.0.0] - 2026-04-09
+### Added
+- **Voice integration**: `speak_tts` MCP tool calls `tts.speak` via `tts.google_ai_tts_2`; agents can now announce decisions aloud. `POST /api/voice/speak` endpoint for direct API calls.
+- **Vision agent**: `VisionAgent` class monitors cameras via Gemini Vision API (`gemini-robotics-er-1.5-preview`). Doorbell and motion alerts spoken via TTS. Configurable per-camera in `agents.yaml`.
+- **`get_camera_snapshot()`**: HA REST API camera proxy method added to `ha_client.py`.
+- **Startup health gate**: `wait_until_connected(timeout=30)` before starting agent loops; `/api/health/ready` returns 503 while HA is still connecting.
+- **Resilient `run.sh`**: removed `set -e`; Ollama pull failures no longer crash the add-on.
+- **Exponential backoff** in reconnect loop: 10s → 20s → 40s → cap 60s.
+### Fixed
+- Guarded `google.generativeai` import in `orchestrator.py` and `vision_agent.py`.
+- Unified all agents to `mistral:7b-instruct` in `agents.yaml` for maximum compatibility.
+<br>
+<br>
+
 ## [0.9.45] - 2025-12-22
 ### Fixed
 - **HA Connectivity Robustness**: Improved error logging in `ha_client.py` with full URI and exception details. Added a startup wait period in `main.py` to prevent race conditions during early ingestion.

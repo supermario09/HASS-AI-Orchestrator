@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.9",
+    "version": "1.1.0",
     "slug": "ai-orchestrator",
-    "description": "v1.0.9: LLM serialization + Vision fallback + Decision feedback + Entity Watchlist",
+    "description": "v1.1.0: Export rated decisions as JSONL/JSON/CSV for AI fine-tuning",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

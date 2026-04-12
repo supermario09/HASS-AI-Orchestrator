@@ -721,6 +721,196 @@ async def submit_decision_feedback(req: DecisionFeedbackRequest):
     raise HTTPException(status_code=404, detail="Decision with that timestamp not found")
 
 
+@app.get("/api/decisions/export")
+async def export_decisions(
+    feedback: Optional[str] = None,   # "up" | "down" | None (all rated)
+    agent_id: Optional[str] = None,   # filter to one agent, or all
+    fmt: str = "jsonl",               # "jsonl" (fine-tuning) | "json" (array) | "csv"
+):
+    """
+    Export rated decisions for AI fine-tuning.
+
+    Query params:
+      feedback=up    → thumbs-up decisions only (positive training examples)
+      feedback=down  → thumbs-down decisions only
+      (omit)         → all decisions that have been rated (up OR down)
+      agent_id=      → filter to a specific agent
+      fmt=jsonl      → JSONL one-example-per-line (default, best for fine-tuning)
+      fmt=json       → JSON array
+      fmt=csv        → CSV spreadsheet
+
+    JSONL format (OpenAI-compatible fine-tuning):
+      Each line: {"messages": [...], "metadata": {...}}
+      "up"   rated decisions → kept as positive (assistant role content = what the model did well)
+      "down" rated decisions → included with label so you can use DPO / RLHF later
+    """
+    if feedback and feedback not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="feedback must be 'up', 'down', or omitted")
+    if fmt not in ("jsonl", "json", "csv"):
+        raise HTTPException(status_code=400, detail="fmt must be 'jsonl', 'json', or 'csv'")
+
+    base_dir = Path("/data/decisions")
+    if not base_dir.exists():
+        raise HTTPException(status_code=404, detail="No decisions directory found")
+
+    # Collect candidate directories
+    if agent_id:
+        dirs = [base_dir / agent_id]
+    else:
+        dirs = [d for d in base_dir.iterdir() if d.is_dir()] if base_dir.exists() else []
+
+    # Load all files that have been rated
+    rated = []
+    for d in dirs:
+        if not d.exists():
+            continue
+        for fp in sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime):
+            try:
+                with open(fp) as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            if "feedback" not in data:
+                continue
+            if feedback and data["feedback"] != feedback:
+                continue
+            rated.append(data)
+
+    if not rated:
+        raise HTTPException(
+            status_code=404,
+            detail="No rated decisions found. Rate some decisions with thumbs-up/down first."
+        )
+
+    # ── Build export rows ──────────────────────────────────────────────────────
+
+    def _build_jsonl_row(d: dict) -> dict:
+        """Convert a decision log entry into an OpenAI fine-tuning JSONL row."""
+        aid       = d.get("agent_id", "unknown")
+        reasoning = d.get("decision", {}).get("reasoning") or d.get("reasoning", "")
+        actions   = d.get("decision", {}).get("actions") or d.get("actions") or d.get("action") or []
+
+        # Build context string from stored context (may vary by agent type)
+        ctx = d.get("context", {})
+        ctx_str = json.dumps(ctx, indent=2) if ctx else "(no context recorded)"
+
+        # Find the agent's instruction if it's stored in the file
+        instruction = ctx.get("instruction", "") or ""
+
+        system_msg = (
+            f"You are an autonomous home automation agent (ID: {aid}).\n"
+            + (f"Your standing instruction: {instruction}\n" if instruction else "")
+            + "Make intelligent decisions about home automation based on current sensor and entity states."
+        )
+        user_msg   = f"Current home state:\n{ctx_str}"
+        asst_msg   = (
+            f"Reasoning: {reasoning}\n\n"
+            f"Actions: {json.dumps(actions, indent=2)}"
+        )
+
+        return {
+            "messages": [
+                {"role": "system",    "content": system_msg},
+                {"role": "user",      "content": user_msg},
+                {"role": "assistant", "content": asst_msg},
+            ],
+            "metadata": {
+                "agent_id":    aid,
+                "timestamp":   d.get("timestamp", ""),
+                "feedback":    d.get("feedback", ""),
+                "feedback_at": d.get("feedback_at", ""),
+                "dry_run":     d.get("dry_run", False),
+            },
+        }
+
+    # ── Serialise ──────────────────────────────────────────────────────────────
+
+    now_str  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fb_label = f"_{feedback}" if feedback else "_rated"
+    ag_label = f"_{agent_id}" if agent_id else ""
+
+    if fmt == "jsonl":
+        lines = "\n".join(json.dumps(_build_jsonl_row(d)) for d in rated)
+        filename = f"decisions{ag_label}{fb_label}_{now_str}.jsonl"
+        from fastapi.responses import Response
+        return Response(
+            content=lines,
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    elif fmt == "json":
+        rows = [_build_jsonl_row(d) for d in rated]
+        filename = f"decisions{ag_label}{fb_label}_{now_str}.json"
+        from fastapi.responses import Response
+        return Response(
+            content=json.dumps(rows, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    else:  # csv
+        import io
+        import csv as _csv
+        buf = io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["timestamp", "agent_id", "feedback", "reasoning", "actions", "dry_run"])
+        for d in rated:
+            reasoning = d.get("decision", {}).get("reasoning") or d.get("reasoning", "")
+            actions   = json.dumps(
+                d.get("decision", {}).get("actions") or d.get("actions") or d.get("action") or []
+            )
+            writer.writerow([
+                d.get("timestamp", ""),
+                d.get("agent_id", ""),
+                d.get("feedback", ""),
+                reasoning,
+                actions,
+                d.get("dry_run", False),
+            ])
+        filename = f"decisions{ag_label}{fb_label}_{now_str}.csv"
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+@app.get("/api/decisions/export/stats")
+async def export_stats(agent_id: Optional[str] = None):
+    """
+    Return counts of rated vs unrated decisions — shown in the UI before export
+    so the user knows how many examples are available.
+    """
+    base_dir = Path("/data/decisions")
+    if not base_dir.exists():
+        return {"total": 0, "rated": 0, "up": 0, "down": 0, "unrated": 0}
+
+    dirs = (
+        [base_dir / agent_id] if agent_id
+        else [d for d in base_dir.iterdir() if d.is_dir()]
+    )
+
+    total = rated = up = down = 0
+    for d in dirs:
+        if not d.exists():
+            continue
+        for fp in d.glob("*.json"):
+            try:
+                data = json.load(open(fp))
+            except Exception:
+                continue
+            total += 1
+            fb = data.get("feedback")
+            if fb == "up":
+                rated += 1; up += 1
+            elif fb == "down":
+                rated += 1; down += 1
+
+    return {"total": total, "rated": rated, "up": up, "down": down, "unrated": total - rated}
+
+
 @app.get("/api/approvals", response_model=List[ApprovalRequestResponse])
 async def get_approvals(status: str = "pending"):
     """Get approval requests filtered by status"""
