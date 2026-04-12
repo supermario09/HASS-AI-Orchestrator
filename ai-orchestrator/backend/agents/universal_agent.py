@@ -89,7 +89,8 @@ class UniversalAgent(BaseAgent):
         model_name: str = "mistral:7b-instruct",
         decision_interval: int = 120,
         broadcast_func: Optional[Any] = None,
-        knowledge: str = ""
+        knowledge: str = "",
+        event_driven: bool = False,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -101,6 +102,7 @@ class UniversalAgent(BaseAgent):
             model_name=model_name,
             decision_interval=decision_interval,
             broadcast_func=broadcast_func,
+            event_driven=event_driven,
         )
         self.instruction = instruction
         self.entities = entities

@@ -31,7 +31,7 @@
         "decision_interval": 120,
         "enable_gpu": false,
         "smart_model": "mistral:7b-instruct",
-        "fast_model": "mistral:7b-instruct",
+        "fast_model": "gemma4:e4b",
         "orchestrator_model": "mistral:7b-instruct",
         "allowed_domains": "light,switch,fan,climate,media_player,cover,input_boolean,input_select,input_number,scene,button,vacuum,water_heater,lock,alarm_control_panel,camera",
         "blocked_domains": "shell_command,hassio,script,automation,rest_command",

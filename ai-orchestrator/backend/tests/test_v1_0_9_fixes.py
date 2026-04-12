@@ -54,36 +54,27 @@ class TestLLMSemaphore:
     """_get_llm_semaphore() must return a single shared asyncio.Semaphore."""
 
     def test_semaphore_is_asyncio_semaphore(self):
-        """The function must return an asyncio.Semaphore instance."""
-        # Reset module-level state so we test lazy creation cleanly
+        """_get_llm_semaphore() must return an asyncio.Semaphore instance."""
         import agents.base_agent as ba
-        orig = ba._LLM_SEMAPHORE
-        ba._LLM_SEMAPHORE = None
+        ba._LLM_SEMAPHORES.clear()
         try:
-            # Must be called inside an event loop so Semaphore can be created
-            async def _get():
-                return ba._get_llm_semaphore()
-            sem = asyncio.get_event_loop().run_until_complete(_get())
+            sem = ba._get_llm_semaphore("test-model")
             assert isinstance(sem, asyncio.Semaphore), (
                 f"Expected asyncio.Semaphore, got {type(sem)}"
             )
         finally:
-            ba._LLM_SEMAPHORE = orig
+            ba._LLM_SEMAPHORES.clear()
 
     def test_semaphore_is_singleton(self):
-        """Two consecutive calls must return the same object."""
+        """Same model name must return the same semaphore object on every call."""
         import agents.base_agent as ba
-        orig = ba._LLM_SEMAPHORE
-        ba._LLM_SEMAPHORE = None
+        ba._LLM_SEMAPHORES.clear()
         try:
-            async def _get_both():
-                s1 = ba._get_llm_semaphore()
-                s2 = ba._get_llm_semaphore()
-                return s1, s2
-            s1, s2 = asyncio.get_event_loop().run_until_complete(_get_both())
-            assert s1 is s2, "Each call returned a different semaphore — not a singleton"
+            s1 = ba._get_llm_semaphore("mistral:7b-instruct")
+            s2 = ba._get_llm_semaphore("mistral:7b-instruct")
+            assert s1 is s2, "Each call returned a different semaphore — not a singleton per model"
         finally:
-            ba._LLM_SEMAPHORE = orig
+            ba._LLM_SEMAPHORES.clear()
 
     @pytest.mark.asyncio
     async def test_call_llm_acquires_semaphore(self, tmp_path):
@@ -106,16 +97,16 @@ class TestLLMSemaphore:
 
         original_to_thread = asyncio.to_thread
 
-        # Intercept to_thread and record whether the semaphore is held at that point
+        # Intercept to_thread and record whether the agent's model semaphore is held
         import agents.base_agent as ba
-        real_sem = ba._get_llm_semaphore()
+        real_sem = ba._get_llm_semaphore(agent.model_name)
 
         async def _spy_to_thread(func, *args, **kwargs):
             # If the semaphore is held (locked) when to_thread is called, our guard works
             acquired_times.append(real_sem.locked())
             return {"message": {"content": "ok"}}
 
-        with patch("asyncio.to_thread", side_effect=_spy_to_thread):
+        with patch("agents.base_agent.asyncio.to_thread", side_effect=_spy_to_thread):
             await agent._call_llm("hello")
 
         assert acquired_times, "_call_llm() never called to_thread"

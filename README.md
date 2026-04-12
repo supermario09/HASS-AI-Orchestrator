@@ -1,6 +1,6 @@
 # 🏠 HASS-AI-Orchestrator
 
-![Version](https://img.shields.io/badge/version-v1.1.0-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-80%20passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v1.2.0-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen)
 
 **The Autonomous Multi-Agent Brain for your Smart Home.**
 
@@ -10,7 +10,20 @@ The AI Orchestrator transforms your Home Assistant from a collection of manual t
 
 ---
 
-## ✨ What's New (v1.0.x → v1.1.0)
+## ✨ What's New (v1.0.x → v1.2.0)
+
+### v1.2.0 — Fast Reactive Agents
+- **Event-driven wake**: lighting and security agents subscribe to HA `state_changed` events and respond *immediately* — no polling delay. A motion sensor trigger fires the agent in <1s instead of up to 5 minutes
+- **Per-model LLM semaphores**: `gemma4:e4b` and `mistral:7b-instruct` run concurrently — a slow reasoning call no longer blocks a fast reactive agent
+- **`model: fast` / `model: smart` aliases**: set per-agent in `agents.yaml`, resolve to the `fast_model`/`smart_model` config values
+- **`gemma4:e4b` as default fast model**: lighting and security decisions complete in ~2s instead of ~20s
+- **Pin entities in the UI** to activate instant event-driven wake for any agent
+
+### v1.1.1 — LAN Ollama Timeout Fix
+- **Eliminates "LLM returned empty response"** when Ollama runs on a separate machine (e.g. M4 Mac Mini) over a LAN connection — root cause was httpx's default 5s read timeout firing before the response could arrive
+- Explicit `httpx.Timeout(connect=10, read=120)` applied to all Ollama clients in `base_agent.py` and `vision_agent.py`
+- Generation params tuned for capable hardware: `num_ctx=4096`, `num_predict=1000`
+- Retry delays tightened to 3s/8s (LAN blips, not slow local hardware)
 
 ### v1.1.0 — Decision Export for Fine-Tuning
 - **Export rated decisions** as JSONL (OpenAI fine-tuning format), JSON, or CSV
@@ -126,6 +139,7 @@ Rate agent decisions with thumbs-up/down. Export all rated decisions as JSONL in
 - **Blocked Domains**: dangerous domains (`shell_command`, `hassio`, `script`, `automation`) are explicitly blocked.
 - **Approval Queue**: high-impact actions (unlocking doors, disarming alarms) require manual approval from the dashboard.
 - **Dry Run Mode**: agents plan but don't execute until you trust them.
+- **Event-driven, not polling**: reactive agents subscribe to HA state changes and wake in <1s rather than waiting a polling interval.
 
 ---
 
@@ -139,12 +153,13 @@ Rate agent decisions with thumbs-up/down. Export all rated decisions as JSONL in
 
 ## 🧪 Test Suite
 
-80 automated tests covering all stability fixes, entity management, vision fallback, feedback, and export logic.
+120 automated tests covering all stability fixes, entity management, vision fallback, feedback, export, LAN timeout, and reactive agent behaviour.
 
 ```bash
 cd ai-orchestrator/backend
 pytest tests/test_stability_fixes.py tests/test_v1_0_8_entity_manager.py \
-       tests/test_v1_0_9_fixes.py tests/test_v1_1_0_export.py -v
+       tests/test_v1_0_9_fixes.py tests/test_v1_1_0_export.py \
+       tests/test_v1_1_1_lan_timeout.py tests/test_v1_2_0_fast_reactive.py -v
 ```
 
 ---

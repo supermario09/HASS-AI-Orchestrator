@@ -1,6 +1,26 @@
 # Changelog
 <br>
 
+## [1.2.0] - 2026-04-12
+### Added
+- **Event-driven agent wake**: agents with `event_driven: true` in `agents.yaml` subscribe to HA `state_changed` events for their configured entities and wake *immediately* when any entity changes — no longer waiting out the full polling interval. A 10s debounce prevents rapid re-triggering. The polling interval becomes a heartbeat fallback.
+- **Per-model LLM semaphores**: replaced the single global semaphore with a per-model-name dict. A slow `mistral:7b-instruct` call no longer blocks a fast `gemma4:e4b` agent. Each model serialises its own requests; different models run concurrently.
+- **`model: fast` / `model: smart` aliases** in `agents.yaml`: resolve to the `fast_model` / `smart_model` add-on config values at runtime — no need to hardcode model tags per-agent.
+- **`gemma4:e4b` as default `fast_model`**: lighting and security agents now default to the fast model for ~2s decisions vs ~20s with mistral:7b.
+- **Lighting and security updated**: `event_driven: true`, `model: fast`, lighting heartbeat 60s, security heartbeat 30s.
+- **Tests** (28 new): per-model semaphore isolation, no cross-model blocking, semaphore key correctness in `_call_llm` and VisionAgent paths, debounce conditions, subscription setup, model alias resolution, UniversalAgent propagation (120 total).
+<br>
+<br>
+
+## [1.1.1] - 2026-04-12
+### Fixed
+- **LAN timeout for remote Ollama**: `ollama.Client` in both `base_agent.py` and `vision_agent.py` now constructed with `httpx.Timeout(connect=10, read=120, write=10, pool=10)`. The default 5s httpx read timeout was firing before responses could arrive from Ollama running on a separate machine (e.g. M4 Mac Mini) over a LAN connection, causing "LLM returned empty response" errors on every decision cycle.
+- **M4-tuned generation params**: `num_ctx=4096` and `num_predict=1000` — restored to full values appropriate for a capable Ollama host, not capped for low-memory hardware.
+- **Retry delays**: reduced from 5s/10s to 3s/8s — sized for transient LAN blips, not slow local hardware.
+- **Tests** (12 new): httpx.Timeout present and read=120 on both clients, num_ctx/num_predict values, retry delays [3, 8], exhausted-retry ERROR string, VisionAgent Ollama text path params (92 total).
+<br>
+<br>
+
 ## [1.1.0] - 2026-04-12
 ### Added
 - **Decision Export**: `GET /api/decisions/export` downloads rated decisions as JSONL (OpenAI fine-tuning format), JSON array, or CSV. Filter by `feedback=up|down` or all rated; scope by `agent_id`. Each JSONL row is a system/user/assistant message triple — ready to use directly with OpenAI fine-tuning or Axolotl/LLaMA-Factory.
