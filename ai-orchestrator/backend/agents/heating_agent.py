@@ -53,7 +53,7 @@ class HeatingAgent(BaseAgent):
             Context dict with climate states, sensors, and time info
         """
         context = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "climate_states": {},
             "sensors": {},
             "time_of_day": self._get_time_of_day()
@@ -242,7 +242,7 @@ Respond with a JSON object containing your reasoning and actions.
                         "type": "decision",
                         "data": {
                             "agent_id": self.agent_id,
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now().astimezone().isoformat(),
                             "reasoning": decision.get("reasoning", ""),
                             "actions": decision.get("actions", []),
                             "results": results

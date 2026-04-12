@@ -319,7 +319,7 @@ If no action is needed, return an empty actions array.
                     "agent_id": self.agent_id,
                     "name": self.name,
                     "status": status,
-                    "last_active": datetime.now().isoformat()
+                    "last_active": datetime.now().astimezone().isoformat()
                 }
             })
 
@@ -356,7 +356,7 @@ If no action is needed, return an empty actions array.
                     await self.broadcast_func({
                         "type": "decision",
                         "data": {
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now().astimezone().isoformat(),
                             "agent_id": self.agent_id,
                             "reasoning": decision.get("reasoning", ""),
                             "action": str(decision.get("actions", [])),

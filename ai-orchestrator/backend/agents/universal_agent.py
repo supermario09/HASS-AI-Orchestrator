@@ -271,7 +271,7 @@ class UniversalAgent(BaseAgent):
     async def gather_context(self) -> Dict:
         state_desc = await self._get_state_description()
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "state_description": state_desc,
             "instruction": self.instruction,
         }

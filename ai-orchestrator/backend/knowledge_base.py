@@ -136,7 +136,7 @@ class KnowledgeBase:
                     {
                         "entity_id": entity_id,
                         "domain": domain,
-                        "last_updated": datetime.now().isoformat(),
+                        "last_updated": datetime.now().astimezone().isoformat(),
                         "desc_hash": desc_hash,
                     },
                     doc_id,

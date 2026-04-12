@@ -106,7 +106,7 @@ class RagManager:
             
         # Add timestamp if missing
         if "timestamp" not in metadata:
-            metadata["timestamp"] = datetime.now().isoformat()
+            metadata["timestamp"] = datetime.now().astimezone().isoformat()
             
         # Generate embedding
         embedding = self._generate_embedding(text)

@@ -17,6 +17,25 @@ router = APIRouter(prefix="/api/stats", tags=["analytics"])
 
 DECISION_DIR = Path("/data/decisions")
 
+
+def _parse_ts(ts_str: str) -> datetime:
+    """
+    Parse an ISO timestamp (naive or timezone-aware) to a naive LOCAL datetime.
+
+    Old log files written before v1.0.7 have naive timestamps (no offset).
+    New files written after v1.0.7 have timezone-aware timestamps (e.g. +05:30).
+    Normalising both to naive-local lets us compare them with datetime.now()
+    without triggering "can't compare offset-naive and offset-aware datetimes".
+    """
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except (ValueError, AttributeError, TypeError):
+        return datetime.now()
+
+
 class AnalyticsService:
     """Service to aggregate and analyze agent decision logs"""
     
@@ -52,7 +71,7 @@ class AnalyticsService:
                         # Ensure timestamp exists and is recent
                         ts_str = data.get("timestamp")
                         if ts_str:
-                            ts = datetime.fromisoformat(ts_str)
+                            ts = _parse_ts(ts_str)
                             if ts >= cutoff:
                                 logs.append(data)
                 except Exception as e:
@@ -72,7 +91,7 @@ class AnalyticsService:
         all_agents = set()
         
         for log in logs:
-            ts = datetime.fromisoformat(log.get("timestamp"))
+            ts = _parse_ts(log.get("timestamp", ""))
             date_str = ts.strftime("%Y-%m-%d")
             agent_id = log.get("agent_id", "unknown")
             

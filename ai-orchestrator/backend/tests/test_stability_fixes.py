@@ -1,13 +1,13 @@
 """
-Tests for the stability fixes applied in v1.0.6.
+Tests for the stability and timezone fixes applied in v1.0.6 / v1.0.7.
 
-Covers the four root-cause issues that were causing HA WebSocket
-disconnections and process restarts:
-
+Covers:
 1. asyncio.get_running_loop() replaces deprecated get_event_loop()
 2. Subscription callback exception isolation in _receive_messages()
 3. Race-condition guard on future.set_result() (done-future crash)
 4. Blocking ollama.Client.chat() / Gemini calls moved to asyncio.to_thread()
+5. Timezone correctness — all timestamps include UTC offset; analytics handles
+   mixed naive/aware timestamps without TypeError
 """
 import asyncio
 import json
@@ -35,6 +35,9 @@ for _mod in (
     "chromadb.utils",
     "langgraph.checkpoint",
     "langgraph.checkpoint.memory",
+    # analytics.py imports fastapi at module level; not installed in test env
+    "fastapi",
+    "fastapi.routing",
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
@@ -457,3 +460,119 @@ class TestOrchestratorNonBlocking:
         )
         first_arg = mock_to_thread.call_args[0][0]
         assert first_arg is mock_gemini_model.generate_content
+
+
+# ===========================================================================
+# 6.  Timezone — timestamps are always timezone-aware; analytics handles both
+# ===========================================================================
+
+class TestTimezone:
+
+    def test_datetime_now_astimezone_includes_offset(self):
+        """
+        datetime.now().astimezone().isoformat() must include a UTC offset so
+        JavaScript can parse it unambiguously. e.g. "+05:30" or "+00:00".
+        A naive string like "2026-04-12T08:30:00" has NO offset — JS mis-interprets it.
+        """
+        from datetime import datetime
+        ts = datetime.now().astimezone().isoformat()
+        # A timezone-aware isoformat always contains '+' or ends with 'Z'
+        has_offset = ('+' in ts[10:]) or ts.endswith('Z')  # skip date portion
+        assert has_offset, (
+            f"datetime.now().astimezone().isoformat() produced '{ts}' "
+            "which has no UTC offset — JavaScript will mis-interpret it as local time"
+        )
+
+    def test_parse_ts_naive(self):
+        """_parse_ts() must parse an old naive timestamp without raising."""
+        from analytics import _parse_ts
+        from datetime import datetime
+        naive_str = "2026-04-12T08:30:00.123456"
+        result = _parse_ts(naive_str)
+        assert isinstance(result, datetime)
+        assert result.tzinfo is None, "Expected naive datetime from naive input"
+        assert result.hour == 8
+
+    def test_parse_ts_aware_utc_z(self):
+        """_parse_ts() must convert a 'Z'-suffixed UTC string to naive local."""
+        from analytics import _parse_ts
+        from datetime import datetime
+        utc_str = "2026-04-12T03:00:00.000000Z"
+        result = _parse_ts(utc_str)
+        assert isinstance(result, datetime)
+        assert result.tzinfo is None, "Expected naive datetime output"
+        # The exact hour depends on the system timezone — just check it parsed
+        assert 0 <= result.hour <= 23
+
+    def test_parse_ts_aware_offset(self):
+        """_parse_ts() must convert an offset-aware timestamp to naive local."""
+        from analytics import _parse_ts
+        from datetime import datetime
+        # IST offset: +05:30
+        ist_str = "2026-04-12T08:30:00.000000+05:30"
+        result = _parse_ts(ist_str)
+        assert isinstance(result, datetime)
+        assert result.tzinfo is None
+
+    def test_parse_ts_mixed_comparison_no_typeerror(self):
+        """
+        Comparing naive datetime.now() with _parse_ts() of an aware timestamp
+        must NOT raise TypeError (the original bug when new log files appeared).
+        """
+        from analytics import _parse_ts
+        from datetime import datetime, timedelta
+        aware_str = "2026-04-12T08:30:00+05:30"
+        naive_cutoff = datetime.now() - timedelta(days=7)
+        ts = _parse_ts(aware_str)
+        # This comparison would raise TypeError before the fix
+        try:
+            _ = ts >= naive_cutoff
+        except TypeError as e:
+            pytest.fail(f"TypeError raised comparing mixed timestamps: {e}")
+
+    def test_parse_ts_invalid_returns_fallback(self):
+        """_parse_ts() must return a datetime (not raise) for garbage input."""
+        from analytics import _parse_ts
+        from datetime import datetime
+        result = _parse_ts("not-a-timestamp")
+        assert isinstance(result, datetime)
+
+    def test_base_agent_broadcast_timestamp_is_aware(self, tmp_path):
+        """
+        The 'last_active' and decision 'timestamp' broadcast by base_agent must
+        include a UTC offset so the frontend displays the correct local time.
+        """
+        from datetime import datetime
+        from agents.base_agent import BaseAgent
+
+        class _Agent(BaseAgent):
+            async def decide(self, context): return {"actions": []}
+            async def gather_context(self): return {}
+
+        with patch("pathlib.Path.mkdir"):
+            agent = _Agent(
+                agent_id="tz_test",
+                name="TZ Test",
+                mcp_server=MagicMock(),
+                ha_client=MagicMock(),
+                skills_path=str(tmp_path / "SKILLS.md"),
+                model_name="test-model",
+            )
+
+        broadcasts = []
+
+        async def capture_broadcast(msg):
+            broadcasts.append(msg)
+
+        agent.broadcast_func = capture_broadcast
+
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(agent._broadcast_status("idle"))
+
+        assert broadcasts, "No broadcast message emitted"
+        ts = broadcasts[0]["data"]["last_active"]
+        has_offset = ('+' in ts[10:]) or ts.endswith('Z')
+        assert has_offset, (
+            f"Broadcast last_active timestamp '{ts}' has no UTC offset — "
+            "frontend will display wrong time"
+        )

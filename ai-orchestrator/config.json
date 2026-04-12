@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "slug": "ai-orchestrator",
-    "description": "v1.0.6: Fix HA WebSocket stability — unblock event loop, fix Python 3.11 asyncio, guard futures",
+    "description": "v1.0.7: Fix timezone — auto-detect from HA config, apply to all timestamps and decision-making",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

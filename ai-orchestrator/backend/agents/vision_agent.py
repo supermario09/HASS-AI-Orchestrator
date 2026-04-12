@@ -230,7 +230,7 @@ class VisionAgent:
                     obs = {
                         "camera": entity_id,
                         "analysis": analysis,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now().astimezone().isoformat(),
                     }
                     observations.append(obs)
                     logger.info(f"📷 [{entity_id}]: {analysis[:120]}")
@@ -265,7 +265,7 @@ class VisionAgent:
             with open(log_file, "w") as f:
                 json.dump(
                     {
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now().astimezone().isoformat(),
                         "agent_id": self.agent_id,
                         "observations": observations,
                     },
@@ -286,7 +286,7 @@ class VisionAgent:
                     "name": self.name,
                     "status": self.status,
                     "observations": observations,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now().astimezone().isoformat(),
                 },
             })
         except Exception:

@@ -421,7 +421,7 @@ Only create tasks if action is needed. Return empty tasks array if everything is
             
             return {
                 "climate": climate_states,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().astimezone().isoformat()
             }
         except Exception as e:
             logger.error(f"Error getting home state: {e}")

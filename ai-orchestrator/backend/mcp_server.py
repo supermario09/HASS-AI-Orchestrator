@@ -388,7 +388,7 @@ class MCPServer:
         
         # Log tool call
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "agent_id": agent_id,
             "tool": tool_name,
             "parameters": parameters,

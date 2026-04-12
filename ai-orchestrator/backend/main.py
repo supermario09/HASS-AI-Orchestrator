@@ -255,12 +255,39 @@ async def lifespan(app: FastAPI):
         header_token = None
         print(f"DEBUG: Using Direct Core Access Mode (Token present: {bool(ha_token)})")
 
+    # 3a. Detect HA timezone and apply to the running Python process.
+    # This makes datetime.now() return the correct local time for decision-making
+    # (e.g., heating/lighting hour checks) AND for log timestamps.
+    # We do this here in Python (not just in run.sh) for reliability — the
+    # supervisor API may not be ready when run.sh executes the curl.
+    import time as _time
+    _tz_applied = False
+    try:
+        _tz_url = "http://supervisor/core/api/config" if supervisor_token else f"{ha_url}/api/config"
+        _tz_token = supervisor_token or ha_token
+        async with httpx.AsyncClient(timeout=10.0) as _tc:
+            _tz_resp = await _tc.get(
+                _tz_url,
+                headers={"Authorization": f"Bearer {_tz_token}"}
+            )
+            _tz_resp.raise_for_status()
+            _ha_tz = _tz_resp.json().get("time_zone", "")
+        if _ha_tz:
+            os.environ["TZ"] = _ha_tz
+            _time.tzset()
+            _tz_applied = True
+            print(f"✅ Timezone applied: {_ha_tz} (datetime.now() will now return correct local time)")
+        else:
+            print("⚠️ HA config returned no time_zone field — using system default")
+    except Exception as _tz_err:
+        print(f"⚠️ Could not auto-detect HA timezone: {_tz_err} — using TZ={os.getenv('TZ', 'UTC')}")
+
     ha_client = HAWebSocketClient(
         ha_url=ha_url,
         token=ha_token,
         supervisor_token=header_token
     )
-    
+
     # 3. Start HA Client with Reconnection Loop
     try:
         # Start the background reconnection loop first
