@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "slug": "ai-orchestrator",
-    "description": "v1.0.7: Fix timezone — auto-detect from HA config, apply to all timestamps and decision-making",
+    "description": "v1.0.8: Entity Manager — add/remove agent entities from the UI, persisted to agents.yaml",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

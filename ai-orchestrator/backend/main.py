@@ -609,6 +609,37 @@ async def get_agents():
     return status_list
 
 
+@app.get("/api/entities")
+async def get_all_entities(domain: Optional[str] = None):
+    """
+    Return all entity IDs from Home Assistant, optionally filtered by domain.
+    Used by the frontend entity picker to let users assign entities to agents.
+    Falls back to an empty list if HA is not connected yet.
+    """
+    if not ha_client:
+        return []
+    try:
+        states = await ha_client.get_states()
+        entities = []
+        for s in states:
+            eid = s.get("entity_id", "")
+            if not eid:
+                continue
+            if domain and not eid.startswith(f"{domain}."):
+                continue
+            entities.append({
+                "entity_id": eid,
+                "friendly_name": s.get("attributes", {}).get("friendly_name") or eid,
+                "state": s.get("state", ""),
+                "domain": eid.split(".")[0],
+            })
+        entities.sort(key=lambda x: x["entity_id"])
+        return entities
+    except Exception as e:
+        print(f"⚠️ /api/entities failed: {e}")
+        return []
+
+
 @app.get("/api/decisions")
 async def get_decisions(limit: int = 100, agent_id: Optional[str] = None):
     """Get recent decision history (aggregated or per agent)"""
