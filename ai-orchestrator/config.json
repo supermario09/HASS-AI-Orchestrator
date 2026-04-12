@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "slug": "ai-orchestrator",
-    "description": "v1.0.8: Entity Manager — add/remove agent entities from the UI, persisted to agents.yaml",
+    "description": "v1.0.9: LLM serialization + Vision fallback + Decision feedback + Entity Watchlist",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

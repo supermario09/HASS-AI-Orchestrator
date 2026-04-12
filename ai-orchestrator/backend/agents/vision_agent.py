@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import ollama
+
 logger = logging.getLogger(__name__)
 
 # Guard Gemini import
@@ -32,6 +34,10 @@ try:
 except Exception:
     genai = None  # type: ignore[assignment]
     _GENAI_AVAILABLE = False
+
+# Re-use the same global LLM semaphore as BaseAgent so vision Ollama calls
+# are also serialised and don't pile onto the model alongside other agents.
+from agents.base_agent import _get_llm_semaphore
 
 
 class VisionAgent:
@@ -59,6 +65,8 @@ class VisionAgent:
         default_media_player: str = "media_player.kitchen_display",
         broadcast_func: Optional[Any] = None,
         vision_enabled: bool = False,
+        ollama_model: str = "mistral:7b-instruct",
+        ollama_host: str = "http://localhost:11434",
     ):
         self.agent_id = agent_id
         self.name = name
@@ -70,25 +78,31 @@ class VisionAgent:
         self.default_media_player = default_media_player
         self._broadcast_func = broadcast_func
         self.status = "idle"
-        self.model_name = "gemini-vision"
         self._vision_enabled = vision_enabled
+        self._ollama_model = ollama_model
+        self._ollama_client = ollama.Client(
+            host=os.getenv("OLLAMA_HOST", ollama_host)
+        )
 
-        # Gemini setup
+        # Gemini setup — preferred when api_key is available
         api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
         self._vision_model = None
         if not vision_enabled:
-            logger.info("VisionAgent: use_gemini_for_vision=false — vision analysis disabled")
+            logger.info("VisionAgent: use_gemini_for_vision=false — will use Ollama text fallback")
         elif _GENAI_AVAILABLE and api_key:
             try:
                 genai.configure(api_key=api_key)
                 self._vision_model = genai.GenerativeModel(gemini_model_name)
                 logger.info(f"✅ VisionAgent: Gemini {gemini_model_name} configured")
             except Exception as e:
-                logger.warning(f"⚠️ VisionAgent: Gemini init failed: {e}")
+                logger.warning(f"⚠️ VisionAgent: Gemini init failed: {e} — using Ollama fallback")
         elif not _GENAI_AVAILABLE:
-            logger.warning("VisionAgent: google-generativeai not installed — vision disabled")
+            logger.warning("VisionAgent: google-generativeai not installed — using Ollama text fallback")
         elif not api_key:
-            logger.warning("VisionAgent: GEMINI_API_KEY not set — vision disabled")
+            logger.warning("VisionAgent: GEMINI_API_KEY not set — using Ollama text fallback")
+
+        # Determine display model name for UI
+        self.model_name = f"gemini-vision" if self._vision_model else f"ollama:{ollama_model}"
 
         # Decision log directory
         self._log_dir = Path("/data/decisions/vision")
@@ -127,13 +141,16 @@ class VisionAgent:
 
     async def analyze_camera(self, entity_id: str) -> Optional[str]:
         """
-        Capture and analyze a single camera snapshot.
-
-        Returns the Gemini analysis string, or None on failure.
+        Analyze a camera.  Uses Gemini Vision when configured, otherwise falls
+        back to Ollama text-based analysis of the camera entity's HA state.
         """
-        if not self._vision_model:
-            return None
+        if self._vision_model:
+            return await self._analyze_with_gemini(entity_id)
+        else:
+            return await self._analyze_with_ollama_text(entity_id)
 
+    async def _analyze_with_gemini(self, entity_id: str) -> Optional[str]:
+        """Capture JPEG snapshot and send to Gemini Vision."""
         client = self.ha_client
         if not client:
             return None
@@ -155,25 +172,94 @@ class VisionAgent:
                 "3. Should I alert the household? (yes/no and why)\n"
                 "Keep your response under 100 words."
             )
-            # generate_content is synchronous — run in thread to avoid blocking
-            # the event loop (which would stall WebSocket keepalives)
-            response = await asyncio.to_thread(
-                self._vision_model.generate_content,
-                [prompt, image],
-            )
+            async with _get_llm_semaphore():
+                response = await asyncio.to_thread(
+                    self._vision_model.generate_content,
+                    [prompt, image],
+                )
             return response.text.strip()
         except Exception as e:
             err_str = str(e)
-            # 429 rate limit — back off without logging as an error
             if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
                 logger.warning(
-                    f"VisionAgent: Gemini rate limit (429) for {entity_id}. "
-                    "Backing off 60s. Consider increasing decision_interval or "
-                    "disabling use_gemini_for_vision."
+                    f"VisionAgent: Gemini rate limit (429) for {entity_id}. Backing off 60s."
                 )
                 await asyncio.sleep(60)
             else:
                 logger.error(f"VisionAgent: Gemini call failed for {entity_id}: {e}")
+            return None
+
+    async def _analyze_with_ollama_text(self, entity_id: str) -> Optional[str]:
+        """
+        Ollama text-based fallback when Gemini is unavailable.
+
+        Fetches the camera entity's state and nearby sensor attributes from HA,
+        then asks the configured Ollama model to reason about security/activity.
+        No image is involved — this works with any text model (mistral, deepseek…).
+        """
+        client = self.ha_client
+        if not client or not client.connected:
+            return None
+
+        # Gather camera state + related sensor context
+        context_lines = [f"Camera entity: {entity_id}"]
+        try:
+            cam_state = await client.get_states(entity_id)
+            if cam_state:
+                state_val = cam_state.get("state", "unknown")
+                attrs = cam_state.get("attributes", {})
+                context_lines.append(f"Camera state: {state_val}")
+                # Include any motion/person detection attributes
+                for k, v in attrs.items():
+                    if any(kw in k.lower() for kw in ("motion", "person", "detect", "activity", "trigger")):
+                        context_lines.append(f"  {k}: {v}")
+        except Exception:
+            context_lines.append("Camera state: unavailable")
+
+        # Also pull states of any related binary_sensor / sensor entities
+        # (cameras often have companion motion sensors with the same area prefix)
+        area_prefix = entity_id.split(".")[1].split("_")[0] if "." in entity_id else ""
+        try:
+            all_states = await client.get_states()
+            related = [
+                s for s in (all_states or [])
+                if s.get("entity_id", "").split(".")[0] in ("binary_sensor", "sensor")
+                and area_prefix
+                and area_prefix in s.get("entity_id", "")
+            ][:5]
+            for s in related:
+                eid2 = s.get("entity_id", "")
+                context_lines.append(f"Related sensor {eid2}: {s.get('state', '?')}")
+        except Exception:
+            pass
+
+        context = "\n".join(context_lines)
+        prompt = (
+            f"You are a security monitor. Here is the current state of a camera and nearby sensors:\n\n"
+            f"{context}\n\n"
+            f"Agent instruction: {self.instruction}\n\n"
+            "Based on this sensor data (not an image):\n"
+            "1. What can you infer is happening? (1-2 sentences)\n"
+            "2. Is there any security concern or unusual activity?\n"
+            "3. Should I alert the household? (yes/no and brief reason)\n"
+            "Keep your response under 80 words."
+        )
+
+        try:
+            async with _get_llm_semaphore():
+                response = await asyncio.to_thread(
+                    self._ollama_client.chat,
+                    model=self._ollama_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    options={"temperature": 0.3, "num_predict": 200, "think": False},
+                    stream=False,
+                )
+            import re
+            content = response["message"]["content"]
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+            return content.strip()
+        except Exception as e:
+            logger.error(f"VisionAgent: Ollama fallback failed for {entity_id}: {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -212,13 +298,10 @@ class VisionAgent:
                 await asyncio.sleep(300)
 
         if not self._vision_model:
-            logger.warning(
-                "VisionAgent: No Gemini model available. "
-                "Set GEMINI_API_KEY and ensure google-generativeai is installed."
+            logger.info(
+                "VisionAgent: Gemini Vision unavailable — using Ollama text-based fallback for all cameras."
             )
-            # Keep the loop alive so it can be re-checked if config changes
-            while True:
-                await asyncio.sleep(60)
+            # Fall through to the main loop; analyze_camera() will use _analyze_with_ollama_text()
 
         while True:
             self.status = "deciding"

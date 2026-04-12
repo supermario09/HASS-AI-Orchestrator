@@ -13,6 +13,30 @@ import ollama
 from ha_client import HAWebSocketClient
 from mcp_server import MCPServer
 
+# ---------------------------------------------------------------------------
+# Global LLM semaphore — limits concurrent Ollama calls to 1.
+#
+# Without this, every agent fires its decision loop simultaneously and all
+# of them call ollama.Client.chat() at the same time.  Ollama queues these
+# but the combined latency causes each call to time out, which triggers the
+# agent error path, which restarts the loop, which fires again — a feedback
+# loop that destabilises the whole system.
+#
+# Serialising calls (semaphore=1) means agents queue politely: the second
+# agent waits until the first one's LLM call returns before it starts.
+# Decision intervals are long enough (≥120s by default) that the extra wait
+# is imperceptible in practice.
+# ---------------------------------------------------------------------------
+_LLM_SEMAPHORE: Optional[asyncio.Semaphore] = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Return (lazily creating) the process-wide LLM call semaphore."""
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = asyncio.Semaphore(1)
+    return _LLM_SEMAPHORE
+
 
 class BaseAgent(ABC):
     """
@@ -152,29 +176,30 @@ class BaseAgent(ABC):
             Generated text
         """
         try:
-            # Run synchronous ollama.Client.chat() in a thread to avoid
-            # blocking the asyncio event loop (which would stall WebSocket
-            # keepalives and cause disconnections from HA).
-            response = await asyncio.to_thread(
-                self.ollama_client.chat,
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "think": False,
-                },
-                stream=False,
-            )
+            # Acquire the global LLM semaphore to serialise Ollama calls.
+            # Multiple agents running concurrently would otherwise all call
+            # chat() simultaneously, overwhelming Ollama and causing timeouts.
+            async with _get_llm_semaphore():
+                response = await asyncio.to_thread(
+                    self.ollama_client.chat,
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    options={
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                        "think": False,
+                    },
+                    stream=False,
+                )
 
             content = response["message"]["content"]
-            
+
             # Strip any remaining <think>...</think> blocks (Issue #12 failsafe)
             import re
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-            
+
             return content.strip()
-        
+
         except Exception as e:
             print(f"❌ LLM call failed: {e}")
             return f"ERROR: {str(e)}"

@@ -6,6 +6,7 @@ import { AgentFactory } from './components/AgentFactory'
 import { DecisionStream } from './components/DecisionStream'
 import { ChatAssistant } from './components/ChatAssistant'
 import { VisualDashboard } from './components/VisualDashboard'
+import { EntityWatchlist } from './components/EntityWatchlist'
 import './index.css'
 
 function App() {
@@ -132,6 +133,8 @@ function App() {
                 )
             case 'stream':
                 return <DecisionStream decisions={decisions} />
+            case 'entities':
+                return <EntityWatchlist />
             case 'analytics':
                 return <AnalyticsCharts dailyData={dailyStats} performanceData={performance} />
             case 'factory':

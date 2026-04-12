@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutDashboard, Activity, BarChart3, Bot, Settings, Server, Heart } from 'lucide-react';
+import { LayoutDashboard, Activity, BarChart3, Bot, Settings, Server, Heart, Eye } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { SettingsModal } from './SettingsModal';
 
@@ -34,6 +34,7 @@ export function Layout({ children, activeTab, onTabChange, connected, version = 
     const menuItems = [
         { id: 'live', label: 'Command Centre', icon: LayoutDashboard },
         { id: 'stream', label: 'Decision Stream', icon: Activity },
+        { id: 'entities', label: 'Entity Watchlist', icon: Eye },
         { id: 'analytics', label: 'Analytics', icon: BarChart3 },
         { id: 'factory', label: 'Agent Factory', icon: Bot },
         { id: 'visual', label: 'Visual Dashboard', icon: Server },

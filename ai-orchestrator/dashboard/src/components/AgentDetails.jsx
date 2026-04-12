@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Trash2, Edit2, Check, ExternalLink, Activity, Save, Plus, Search, Loader } from 'lucide-react';
+import { X, Trash2, Edit2, Check, ExternalLink, Activity, Save, Plus, Search, Loader, ThumbsUp, ThumbsDown } from 'lucide-react';
 
 // Domain colour map for entity chips
 const DOMAIN_COLOURS = {
@@ -230,6 +230,38 @@ const AgentDetails = ({ agent, onClose, onDelete }) => {
               )
               .slice(0, 30)
         : [];
+
+    // ── decision feedback ────────────────────────────────────────────────────
+    // Map of timestamp → "up" | "down" | null
+    const [feedbackMap, setFeedbackMap] = useState({});
+
+    // Pre-populate feedback from loaded decisions (if already rated)
+    useEffect(() => {
+        const initial = {};
+        decisions.forEach(d => {
+            if (d.feedback) initial[d.timestamp] = d.feedback;
+        });
+        setFeedbackMap(initial);
+    }, [decisions]);
+
+    const submitFeedback = async (timestamp, feedback) => {
+        // Toggle off if already selected
+        const current = feedbackMap[timestamp];
+        const next = current === feedback ? null : feedback;
+        setFeedbackMap(prev => ({ ...prev, [timestamp]: next }));
+
+        if (next) {
+            try {
+                await fetch('api/decisions/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agent_id: agent.agent_id, timestamp, feedback: next }),
+                });
+            } catch (e) {
+                console.error('Failed to submit feedback', e);
+            }
+        }
+    };
 
     // ── delete ───────────────────────────────────────────────────────────────
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -568,26 +600,56 @@ const AgentDetails = ({ agent, onClose, onDelete }) => {
                     {/* ── HISTORY tab ── */}
                     {activeTab === 'history' && (
                         <div className="space-y-4">
+                            {/* Legend */}
+                            <div className="flex items-center gap-3 text-xs text-slate-500 px-1">
+                                <ThumbsUp size={12} className="text-green-500" />
+                                <span>Good decision</span>
+                                <ThumbsDown size={12} className="text-red-400 ml-3" />
+                                <span>Bad decision — your ratings help fine-tune the AI</span>
+                            </div>
+
                             {decisions.length === 0 ? (
                                 <div className="text-center text-slate-500 py-10">No recent history found.</div>
-                            ) : decisions.map((decision, idx) => (
-                                <div key={idx} className="bg-slate-800/40 p-4 rounded-lg border border-slate-700/50 text-sm">
-                                    <div className="flex justify-between text-xs text-slate-500 mb-2">
-                                        <span>{new Date(decision.timestamp).toLocaleTimeString()}</span>
-                                        <span className={decision.dry_run ? 'text-amber-500' : 'text-slate-500'}>
-                                            {decision.dry_run ? 'DRY RUN' : 'LIVE'}
-                                        </span>
-                                    </div>
-                                    <div className="text-slate-300 mb-2 font-medium">
-                                        {decision.decision?.reasoning || decision.reasoning || 'No reasoning provided.'}
-                                    </div>
-                                    {(decision.decision?.actions || decision.action) && (
-                                        <div className="bg-black/20 p-2 rounded text-xs font-mono text-blue-300 overflow-x-auto">
-                                            {JSON.stringify(decision.decision?.actions || decision.action, null, 2)}
+                            ) : decisions.map((decision, idx) => {
+                                const ts = decision.timestamp;
+                                const fb = feedbackMap[ts];
+                                return (
+                                    <div key={idx} className={`bg-slate-800/40 p-4 rounded-lg border text-sm transition-colors
+                                        ${fb === 'up' ? 'border-green-500/40 bg-green-500/5' : fb === 'down' ? 'border-red-500/40 bg-red-500/5' : 'border-slate-700/50'}`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="text-xs text-slate-500">
+                                                {new Date(ts).toLocaleString()}
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-xs ${decision.dry_run ? 'text-amber-500' : 'text-slate-500'}`}>
+                                                    {decision.dry_run ? 'DRY RUN' : 'LIVE'}
+                                                </span>
+                                                {/* Feedback buttons */}
+                                                <button
+                                                    onClick={() => submitFeedback(ts, 'up')}
+                                                    title="Good decision"
+                                                    className={`p-1 rounded transition-colors ${fb === 'up' ? 'text-green-400 bg-green-500/20' : 'text-slate-600 hover:text-green-400 hover:bg-green-500/10'}`}>
+                                                    <ThumbsUp size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => submitFeedback(ts, 'down')}
+                                                    title="Bad decision"
+                                                    className={`p-1 rounded transition-colors ${fb === 'down' ? 'text-red-400 bg-red-500/20' : 'text-slate-600 hover:text-red-400 hover:bg-red-500/10'}`}>
+                                                    <ThumbsDown size={14} />
+                                                </button>
+                                            </div>
                                         </div>
-                                    )}
-                                </div>
-                            ))}
+                                        <div className="text-slate-300 mb-2 font-medium">
+                                            {decision.decision?.reasoning || decision.reasoning || 'No reasoning provided.'}
+                                        </div>
+                                        {(decision.decision?.actions || decision.action) && (
+                                            <div className="bg-black/20 p-2 rounded text-xs font-mono text-blue-300 overflow-x-auto">
+                                                {JSON.stringify(decision.decision?.actions || decision.action, null, 2)}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
 

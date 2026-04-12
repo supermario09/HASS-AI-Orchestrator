@@ -22,6 +22,7 @@ import json
 import asyncio
 import httpx
 import socket
+from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -381,8 +382,9 @@ async def lifespan(app: FastAPI):
 
                 model_name = agent_cfg.get('model', os.getenv("DEFAULT_MODEL", "mistral:7b-instruct"))
 
-                # Vision agent — routes inference through Gemini Vision, not Ollama
+                # Vision agent — routes inference through Gemini Vision (or Ollama text fallback)
                 if model_name == "gemini" or agent_id == "vision":
+                    _ollama_model = agent_cfg.get('model') if agent_cfg.get('model') not in ("gemini", None) else os.getenv("DEFAULT_MODEL", "mistral:7b-instruct")
                     agents[agent_id] = VisionAgent(
                         agent_id=agent_id,
                         name=agent_cfg['name'],
@@ -396,6 +398,8 @@ async def lifespan(app: FastAPI):
                         default_media_player=agent_cfg.get('media_player', "media_player.kitchen_display"),
                         broadcast_func=broadcast_to_dashboard,
                         vision_enabled=use_gemini_vision_opt,
+                        ollama_model=_ollama_model,
+                        ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
                     )
                 else:
                     # Standard Universal Agent (Ollama-based)
@@ -674,6 +678,47 @@ async def get_decisions(limit: int = 100, agent_id: Optional[str] = None):
             continue
             
     return decisions
+
+
+class DecisionFeedbackRequest(BaseModel):
+    agent_id: str
+    timestamp: str
+    feedback: str  # "up" | "down"
+
+
+@app.post("/api/decisions/feedback")
+async def submit_decision_feedback(req: DecisionFeedbackRequest):
+    """
+    Persist thumbs-up / thumbs-down feedback on a decision log entry.
+    The feedback is written back into the original JSON file so it survives restarts
+    and can later be used for fine-tuning data curation.
+    """
+    if req.feedback not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="feedback must be 'up' or 'down'")
+
+    base_dir = Path("/data/decisions") / req.agent_id
+    if not base_dir.exists():
+        raise HTTPException(status_code=404, detail="No decisions found for this agent")
+
+    # Scan files to find the one whose timestamp matches
+    for file_path in sorted(base_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            with open(file_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        if data.get("timestamp") == req.timestamp:
+            data["feedback"] = req.feedback
+            data["feedback_at"] = datetime.now().astimezone().isoformat()
+            try:
+                with open(file_path, "w") as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to save feedback: {e}")
+            return {"status": "ok", "file": file_path.name}
+
+    raise HTTPException(status_code=404, detail="Decision with that timestamp not found")
 
 
 @app.get("/api/approvals", response_model=List[ApprovalRequestResponse])
