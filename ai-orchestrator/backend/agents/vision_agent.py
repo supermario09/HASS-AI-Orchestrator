@@ -80,8 +80,10 @@ class VisionAgent:
         self.status = "idle"
         self._vision_enabled = vision_enabled
         self._ollama_model = ollama_model
+        import httpx as _httpx
         self._ollama_client = ollama.Client(
-            host=os.getenv("OLLAMA_HOST", ollama_host)
+            host=os.getenv("OLLAMA_HOST", ollama_host),
+            timeout=_httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
         )
 
         # Gemini setup — preferred when api_key is available
@@ -247,7 +249,7 @@ class VisionAgent:
 
         import re
         _MAX_ATTEMPTS = 3
-        _RETRY_DELAYS = [5, 10]
+        _RETRY_DELAYS = [3, 8]   # short — LAN network blips, not hardware slowness
 
         for attempt in range(_MAX_ATTEMPTS):
             if attempt > 0:
@@ -267,7 +269,7 @@ class VisionAgent:
                         options={
                             "temperature": 0.3,
                             "num_predict": 200,
-                            "num_ctx": 2048,
+                            "num_ctx": 4096,
                             "think": False,
                         },
                         stream=False,

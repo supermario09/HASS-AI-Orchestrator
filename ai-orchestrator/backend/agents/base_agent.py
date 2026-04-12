@@ -89,9 +89,16 @@ class BaseAgent(ABC):
         # Load skills from SKILLS.md
         self.skills = self.load_skills()
         
-        # Ollama client
+        # Ollama client — explicit timeout for remote Ollama (e.g. Mac Mini on LAN).
+        # The default httpx read_timeout is 5s, which fires before a 1000-token
+        # response can arrive over the network, causing silent empty responses.
+        # 120s read gives the M4 plenty of headroom even for long reasonings.
+        import httpx as _httpx
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self.ollama_client = ollama.Client(host=ollama_host)
+        self.ollama_client = ollama.Client(
+            host=ollama_host,
+            timeout=_httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
+        )
         
         # Decision storage
         self.decision_dir = Path("/data/decisions") / agent_id
@@ -162,38 +169,39 @@ class BaseAgent(ABC):
         self,
         prompt: str,
         temperature: float = 0.7,
-        max_tokens: int = 500,
+        max_tokens: int = 1000,
     ) -> str:
         """
         Call Ollama LLM (non-blocking, serialised, with automatic retry).
 
-        Runs inside asyncio.to_thread() so the event loop is never blocked.
-        Uses the global LLM semaphore to prevent concurrent Ollama calls from
-        thundering-herd-ing the model on slow hardware.
+        Tuned for a remote Ollama instance on a capable machine (e.g. M4 Mac Mini
+        with 16GB RAM) accessed over a local network from the HA host.
 
-        Retries up to 3 times on empty response or transient errors, releasing
-        the semaphore between attempts so other agents can proceed during backoff.
+        The primary cause of empty responses in this topology is the default httpx
+        read_timeout (5s) firing before the model finishes generating over the LAN.
+        The ollama.Client is constructed with read_timeout=120s (see __init__) so
+        the response always has time to arrive.
+
+        Retries up to 3 times on empty response or transient network blips,
+        releasing the semaphore between attempts so other agents can proceed.
 
         Args:
             prompt:      Prompt text
-            temperature: Sampling temperature (lower = more deterministic)
-            max_tokens:  Maximum tokens to generate (default 500 — keeps
-                         responses short on slow/low-RAM hardware)
+            temperature: Sampling temperature
+            max_tokens:  Maximum tokens to generate (1000 — fine on M4 Mac Mini)
         """
         import re
 
         _MAX_ATTEMPTS = 3
-        _RETRY_DELAYS = [5, 10]   # seconds before attempt 2 and 3
+        _RETRY_DELAYS = [3, 8]   # short delays — network blips, not hardware slowness
 
         last_err: str = "unknown error"
 
         for attempt in range(_MAX_ATTEMPTS):
-            # Release semaphore between retries so other agents aren't blocked
-            # waiting behind a failing call.
             if attempt > 0:
                 delay = _RETRY_DELAYS[attempt - 1]
-                print(f"⚠️ {self.name} LLM attempt {attempt} returned empty/error. "
-                      f"Retrying in {delay}s… ({attempt}/{_MAX_ATTEMPTS - 1})")
+                print(f"⚠️ {self.name} LLM attempt {attempt} empty/error — "
+                      f"retrying in {delay}s… ({attempt}/{_MAX_ATTEMPTS - 1})")
                 await asyncio.sleep(delay)
 
             try:
@@ -205,9 +213,8 @@ class BaseAgent(ABC):
                         options={
                             "temperature": temperature,
                             "num_predict": max_tokens,
-                            # Limit context window — reduces VRAM/RAM on slow hardware
-                            # (Raspberry Pi, NUC) while still covering typical home-agent prompts.
-                            "num_ctx": 2048,
+                            # 4096 context — comfortable for M4 Mac Mini 16GB
+                            "num_ctx": 4096,
                             "think": False,
                         },
                         stream=False,
@@ -228,9 +235,7 @@ class BaseAgent(ABC):
             except Exception as e:
                 last_err = str(e)
                 print(f"❌ {self.name} LLM attempt {attempt + 1} failed: {e}")
-                # Loop continues → retries with delay above
 
-        # All attempts exhausted
         print(f"❌ {self.name} LLM failed after {_MAX_ATTEMPTS} attempts: {last_err}")
         return f"ERROR: {last_err}"
     
