@@ -10,7 +10,11 @@ The AI Orchestrator transforms your Home Assistant from a collection of manual t
 
 ---
 
-## ✨ What's New (v1.0.x → v1.2.2)
+## ✨ What's New (v1.0.x → v1.2.3)
+
+### v1.2.3 — Fix Empty LLM Responses
+- **Restored `num_predict=1000`**: deepseek-r1:8b generates a `<think>` block before every response even when `think: False` is set (silently ignored on some Ollama versions). With the v1.2.2 cap of 500 tokens, the think block consumed the entire budget — after stripping it, content was empty and every decision failed with "LLM returned empty response". 1000 tokens gives room for a think block plus the full JSON response.
+- **Fixed warmup prompt**: the `"ping"` warmup with `max_tokens=3` hit the same issue. Now uses an explicit prompt with `max_tokens=200` so the warmup reliably succeeds.
 
 ### v1.2.2 — LLM Efficiency
 - **`keep_alive=-1`**: model stays loaded in Ollama memory permanently — eliminates the 5-15s model-reload cost that was hitting every other decision cycle at 300s intervals
