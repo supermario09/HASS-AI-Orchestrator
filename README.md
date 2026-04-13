@@ -1,6 +1,6 @@
 # 🏠 HASS-AI-Orchestrator
 
-![Version](https://img.shields.io/badge/version-v1.2.0-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v1.2.1-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-122%20passing-brightgreen)
 
 **The Autonomous Multi-Agent Brain for your Smart Home.**
 
@@ -10,14 +10,15 @@ The AI Orchestrator transforms your Home Assistant from a collection of manual t
 
 ---
 
-## ✨ What's New (v1.0.x → v1.2.0)
+## ✨ What's New (v1.0.x → v1.2.1)
 
-### v1.2.0 — Fast Reactive Agents
-- **Event-driven wake**: lighting and security agents subscribe to HA `state_changed` events and respond *immediately* — no polling delay. A motion sensor trigger fires the agent in <1s instead of up to 5 minutes
-- **Per-model LLM semaphores**: `gemma4:e4b` and `mistral:7b-instruct` run concurrently — a slow reasoning call no longer blocks a fast reactive agent
-- **`model: fast` / `model: smart` aliases**: set per-agent in `agents.yaml`, resolve to the `fast_model`/`smart_model` config values
-- **`gemma4:e4b` as default fast model**: lighting and security decisions complete in ~2s instead of ~20s
-- **Pin entities in the UI** to activate instant event-driven wake for any agent
+### v1.2.1 — Stability Revert
+- **Reverted event-driven wake**: removed reactive subscriptions — they increased Ollama call frequency and worsened timeouts. Use HA native automations for reactive triggers; the AI layer handles slow decisioning only.
+- **Single global semaphore restored**: per-model semaphores allowed concurrent Ollama calls, overloading RAM on the Mac Mini. One global `asyncio.Semaphore(1)` ensures only one model loads at a time — the correct design for a single Ollama server.
+- **Unified model to `deepseek-r1:8b`**: one model for all agents — no need to pull `gemma4:e4b` or `mistral:7b-instruct`. Set in `smart_model`, `fast_model`, and `orchestrator_model`.
+- **Restored 300s polling intervals**: lighting and security agents back to 5-minute cycles matching the AI decisioning cadence.
+
+### v1.2.0 — Fast Reactive Agents (reverted in v1.2.1)
 
 ### v1.1.1 — LAN Ollama Timeout Fix
 - **Eliminates "LLM returned empty response"** when Ollama runs on a separate machine (e.g. M4 Mac Mini) over a LAN connection — root cause was httpx's default 5s read timeout firing before the response could arrive
@@ -153,7 +154,7 @@ Rate agent decisions with thumbs-up/down. Export all rated decisions as JSONL in
 
 ## 🧪 Test Suite
 
-120 automated tests covering all stability fixes, entity management, vision fallback, feedback, export, LAN timeout, and reactive agent behaviour.
+122 automated tests covering all stability fixes, entity management, vision fallback, feedback, export, LAN timeout, and revert correctness.
 
 ```bash
 cd ai-orchestrator/backend

@@ -382,16 +382,6 @@ async def lifespan(app: FastAPI):
 
                 model_name = agent_cfg.get('model', os.getenv("DEFAULT_MODEL", "mistral:7b-instruct"))
 
-                # Resolve 'fast' / 'smart' aliases to the configured model names.
-                # Agents in agents.yaml can use  model: fast  or  model: smart
-                # instead of hardcoding a specific model tag.
-                if model_name == "fast":
-                    model_name = os.getenv("FAST_MODEL", "mistral:7b-instruct")
-                elif model_name == "smart":
-                    model_name = os.getenv("SMART_MODEL", "mistral:7b-instruct")
-
-                event_driven = agent_cfg.get('event_driven', False)
-
                 # Vision agent — routes inference through Gemini Vision (or Ollama text fallback)
                 if model_name == "gemini" or agent_id == "vision":
                     _ollama_model = agent_cfg.get('model') if agent_cfg.get('model') not in ("gemini", None) else os.getenv("DEFAULT_MODEL", "mistral:7b-instruct")
@@ -425,7 +415,6 @@ async def lifespan(app: FastAPI):
                         decision_interval=agent_cfg.get('decision_interval', 120),
                         broadcast_func=broadcast_to_dashboard,
                         knowledge=agent_cfg.get('knowledge', ""),
-                        event_driven=event_driven,
                     )
                 print(f"  ✓ Loaded agent: {agent_cfg['name']} ({agent_id})")
                 

@@ -1,6 +1,17 @@
 # Changelog
 <br>
 
+## [1.2.1] - 2026-04-13
+### Fixed
+- **Reverted event-driven agent wake**: removed `event_driven`, `_trigger_event`, `_on_entity_changed`, and `asyncio.wait_for` wake logic from `base_agent.py`. Event-driven triggering increased Ollama call frequency and made timeouts worse — HA native automations are better suited to reactive triggering. Agents now use simple polling only.
+- **Reverted per-model semaphores**: replaced the per-model `_LLM_SEMAPHORES` dict with the original single `_LLM_SEMAPHORE = asyncio.Semaphore(1)`. Per-model semaphores allowed concurrent Ollama calls, overloading Mac Mini RAM and causing a timeout cascade (concurrent model loading → swapping → timeouts → agent restarts → more calls). A single global semaphore ensures only one model is loaded and inferring at any time.
+- **Removed model aliases**: `model: fast` / `model: smart` aliases removed from `main.py`. All agents now specify the model name directly.
+- **Unified model to `deepseek-r1:8b`**: all agents (`lighting`, `security`, `heating`, `cooling`, `voice`) and all config defaults (`smart_model`, `fast_model`, `orchestrator_model`) set to `deepseek-r1:8b`. Removes the need to pull multiple models.
+- **Restored 300s intervals**: lighting and security agents restored to `decision_interval: 300`. Short intervals (30s, 60s) were tuned for reactive agents and caused unnecessary load without event-driven wake.
+- **Tests** (22 new): global semaphore singleton, no per-model dict, concurrent different-model agents still serialise, VisionAgent both paths use no-arg `_get_llm_semaphore()`, no event-driven attributes on BaseAgent, UniversalAgent rejects `event_driven` kwarg, plain polling loop, deepseek defaults, agents.yaml and config.json assertions (122 total).
+<br>
+<br>
+
 ## [1.2.0] - 2026-04-12
 ### Added
 - **Event-driven agent wake**: agents with `event_driven: true` in `agents.yaml` subscribe to HA `state_changed` events for their configured entities and wake *immediately* when any entity changes — no longer waiting out the full polling interval. A 10s debounce prevents rapid re-triggering. The polling interval becomes a heartbeat fallback.

@@ -174,7 +174,7 @@ class VisionAgent:
                 "3. Should I alert the household? (yes/no and why)\n"
                 "Keep your response under 100 words."
             )
-            async with _get_llm_semaphore("gemini"):
+            async with _get_llm_semaphore():
                 response = await asyncio.to_thread(
                     self._vision_model.generate_content,
                     [prompt, image],
@@ -261,7 +261,7 @@ class VisionAgent:
                 await asyncio.sleep(delay)
 
             try:
-                async with _get_llm_semaphore(self._ollama_model):
+                async with _get_llm_semaphore():
                     response = await asyncio.to_thread(
                         self._ollama_client.chat,
                         model=self._ollama_model,

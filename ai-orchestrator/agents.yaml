@@ -27,10 +27,9 @@ agents:
 
   - id: "lighting"
     name: "Lighting Manager"
-    model: fast           # Resolves to fast_model config (gemma4:e4b) — ~2s decisions
-    event_driven: true    # Wakes immediately on entity state changes; 60s is just a heartbeat
-    decision_interval: 60
-    entities: []          # Pin specific light/motion entities in the UI for instant wake
+    model: "deepseek-r1:8b"
+    decision_interval: 300
+    entities: []
     instruction: |
       Manage lights based on occupancy and time of day.
       Use warmer colours (2700K) in the evening (after 18:00).
@@ -39,10 +38,9 @@ agents:
 
   - id: "security"
     name: "Security Manager"
-    model: fast           # Resolves to fast_model config (gemma4:e4b) — fast alert response
-    event_driven: true    # Wakes immediately on door/lock/motion changes
-    decision_interval: 30 # Short heartbeat for security — don't miss anything
-    entities: []          # Pin door sensors, locks, motion sensors in the UI for instant wake
+    model: "deepseek-r1:8b"
+    decision_interval: 300
+    entities: []
     instruction: |
       Monitor locks, door sensors, and motion sensors.
       If no motion is detected for 30 minutes and it is after 22:00, lock all doors.

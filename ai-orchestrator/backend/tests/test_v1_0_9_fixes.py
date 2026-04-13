@@ -56,25 +56,25 @@ class TestLLMSemaphore:
     def test_semaphore_is_asyncio_semaphore(self):
         """_get_llm_semaphore() must return an asyncio.Semaphore instance."""
         import agents.base_agent as ba
-        ba._LLM_SEMAPHORES.clear()
+        ba._LLM_SEMAPHORE = None
         try:
-            sem = ba._get_llm_semaphore("test-model")
+            sem = ba._get_llm_semaphore()
             assert isinstance(sem, asyncio.Semaphore), (
                 f"Expected asyncio.Semaphore, got {type(sem)}"
             )
         finally:
-            ba._LLM_SEMAPHORES.clear()
+            ba._LLM_SEMAPHORE = None
 
     def test_semaphore_is_singleton(self):
-        """Same model name must return the same semaphore object on every call."""
+        """Every call must return the same global semaphore object."""
         import agents.base_agent as ba
-        ba._LLM_SEMAPHORES.clear()
+        ba._LLM_SEMAPHORE = None
         try:
-            s1 = ba._get_llm_semaphore("mistral:7b-instruct")
-            s2 = ba._get_llm_semaphore("mistral:7b-instruct")
-            assert s1 is s2, "Each call returned a different semaphore — not a singleton per model"
+            s1 = ba._get_llm_semaphore()
+            s2 = ba._get_llm_semaphore()
+            assert s1 is s2, "Each call returned a different semaphore — not a global singleton"
         finally:
-            ba._LLM_SEMAPHORES.clear()
+            ba._LLM_SEMAPHORE = None
 
     @pytest.mark.asyncio
     async def test_call_llm_acquires_semaphore(self, tmp_path):
@@ -97,9 +97,9 @@ class TestLLMSemaphore:
 
         original_to_thread = asyncio.to_thread
 
-        # Intercept to_thread and record whether the agent's model semaphore is held
+        # Intercept to_thread and record whether the global semaphore is held
         import agents.base_agent as ba
-        real_sem = ba._get_llm_semaphore(agent.model_name)
+        real_sem = ba._get_llm_semaphore()
 
         async def _spy_to_thread(func, *args, **kwargs):
             # If the semaphore is held (locked) when to_thread is called, our guard works

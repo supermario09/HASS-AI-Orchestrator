@@ -4,7 +4,6 @@ Base agent class providing common functionality for all specialist agents.
 import os
 import json
 import asyncio
-import time as _time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -28,20 +27,20 @@ from mcp_server import MCPServer
 # Decision intervals are long enough (≥120s by default) that the extra wait
 # is imperceptible in practice.
 # ---------------------------------------------------------------------------
-_LLM_SEMAPHORES: Dict[str, asyncio.Semaphore] = {}
+_LLM_SEMAPHORE: Optional[asyncio.Semaphore] = None
 
 
-def _get_llm_semaphore(model_name: str = "default") -> asyncio.Semaphore:
-    """Return (lazily creating) a per-model LLM call semaphore.
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Return (lazily creating) the process-wide LLM call semaphore.
 
-    Each distinct model gets its own semaphore so a slow mistral:7b call
-    does not block a fast gemma4:e4b agent from making its decision.
-    Requests to the *same* model are still serialised (Semaphore(1)) because
-    Ollama queues concurrent same-model requests internally anyway.
+    A single global semaphore ensures only one Ollama call runs at a time
+    across all agents. This prevents memory pressure when multiple models
+    would otherwise be loaded and inferring simultaneously on the same host.
     """
-    if model_name not in _LLM_SEMAPHORES:
-        _LLM_SEMAPHORES[model_name] = asyncio.Semaphore(1)
-    return _LLM_SEMAPHORES[model_name]
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = asyncio.Semaphore(1)
+    return _LLM_SEMAPHORE
 
 
 class BaseAgent(ABC):
@@ -58,10 +57,9 @@ class BaseAgent(ABC):
         ha_client, #: Union[HAWebSocketClient, Callable[[], HAWebSocketClient]]
         skills_path: str,
         rag_manager: Optional[Any] = None,
-        model_name: str = "mistral:7b-instruct",
-        decision_interval: int = 120,
+        model_name: str = "deepseek-r1:8b",
+        decision_interval: int = 300,
         broadcast_func: Optional[Any] = None,
-        event_driven: bool = False,
     ):
         """
         Initialize base agent.
@@ -90,13 +88,6 @@ class BaseAgent(ABC):
         self.decision_interval = decision_interval
         self.broadcast_func = broadcast_func
         self.status = "initializing"
-
-        # Event-driven wake: wakes the decision loop immediately when a
-        # watched entity changes state instead of waiting the full interval.
-        self._event_driven = event_driven
-        self._trigger_event: Optional[asyncio.Event] = None
-        self._last_decision_at: float = 0.0
-        self._min_trigger_gap: float = 10.0   # debounce: min seconds between decisions
         
         # Load skills from SKILLS.md
         self.skills = self.load_skills()
@@ -217,7 +208,7 @@ class BaseAgent(ABC):
                 await asyncio.sleep(delay)
 
             try:
-                async with _get_llm_semaphore(self.model_name):
+                async with _get_llm_semaphore():
                     response = await asyncio.to_thread(
                         self.ollama_client.chat,
                         model=self.model_name,
@@ -395,23 +386,11 @@ If no action is needed, return an empty actions array.
                 }
             })
 
-    async def _on_entity_changed(self, event: Dict):
-        """Wake the decision loop immediately when a watched entity changes state.
-
-        Debounced: ignored if a decision is already in progress or fewer than
-        _min_trigger_gap seconds have elapsed since the last decision completed.
-        """
-        if self.status == "deciding":
-            return
-        if _time.monotonic() - self._last_decision_at < self._min_trigger_gap:
-            return
-        if self._trigger_event is not None:
-            self._trigger_event.set()
-
     async def run_decision_loop(self):
-        """Main decision loop that runs continuously."""
+        """Main decision loop that runs continuously"""
         self.status = "idle"
         # Wait until HA is connected before making the first decision.
+        # Avoids "Home Assistant not connected" errors on every agent at startup.
         print(f"⏳ {self.name} waiting for Home Assistant connection...")
         for _ in range(60):  # wait up to 60 seconds
             ha = self.ha_client
@@ -419,29 +398,6 @@ If no action is needed, return an empty actions array.
                 break
             await asyncio.sleep(1)
         print(f"✓ {self.name} decision loop started (interval: {self.decision_interval}s)")
-
-        # Subscribe to entity state changes for event-driven wake.
-        # Only attempted when event_driven=True and the agent has explicit entities.
-        if self._event_driven:
-            entities_to_watch = getattr(self, 'entities', [])
-            if entities_to_watch:
-                self._trigger_event = asyncio.Event()
-                try:
-                    await self.ha_client.subscribe_entities(
-                        entities_to_watch, self._on_entity_changed
-                    )
-                    print(
-                        f"⚡ {self.name}: event-driven mode active "
-                        f"({len(entities_to_watch)} entities, {self.decision_interval}s heartbeat)"
-                    )
-                except Exception as sub_exc:
-                    print(f"⚠️ {self.name}: subscription failed — polling only: {sub_exc}")
-                    self._trigger_event = None
-            else:
-                print(
-                    f"⚡ {self.name}: event_driven=true but no entities pinned — "
-                    f"polling at {self.decision_interval}s (add entities in the UI to enable instant wake)"
-                )
 
         while True:
             try:
@@ -472,23 +428,11 @@ If no action is needed, return an empty actions array.
                     })
 
                 self.status = "idle"
-                self._last_decision_at = _time.monotonic()
                 await self._broadcast_status("idle")
                 print(f"✓ {self.name} decision completed (waiting {self.decision_interval}s)")
 
-                # Wait for entity-change trigger OR fall through to periodic heartbeat.
-                if self._trigger_event is not None:
-                    try:
-                        await asyncio.wait_for(
-                            self._trigger_event.wait(),
-                            timeout=float(self.decision_interval),
-                        )
-                        self._trigger_event.clear()
-                        print(f"⚡ {self.name}: woken by entity state change")
-                    except asyncio.TimeoutError:
-                        pass  # periodic heartbeat tick — normal
-                else:
-                    await asyncio.sleep(self.decision_interval)
+                # Sleep at END of loop
+                await asyncio.sleep(self.decision_interval)
 
             except Exception as e:
                 self.status = "error"
