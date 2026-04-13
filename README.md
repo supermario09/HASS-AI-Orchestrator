@@ -1,6 +1,6 @@
 # 🏠 HASS-AI-Orchestrator
 
-![Version](https://img.shields.io/badge/version-v1.2.2-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v1.2.3-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
 
 **The Autonomous Multi-Agent Brain for your Smart Home.**
 

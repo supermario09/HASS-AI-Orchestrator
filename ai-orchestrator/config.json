@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "slug": "ai-orchestrator",
-    "description": "v1.2.2: keep_alive=-1 + num_ctx=2048 + warmup + services cache — cut LLM latency",
+    "description": "v1.2.3: Fix empty LLM responses — restore num_predict=1000 for deepseek-r1:8b",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

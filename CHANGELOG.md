@@ -1,6 +1,13 @@
 # Changelog
 <br>
 
+## [1.2.3] - 2026-04-13
+### Fixed
+- **Restore `num_predict=1000`**: deepseek-r1:8b silently ignores `think: False` on some Ollama versions and generates a `<think>...</think>` block before every response. With `num_predict=500` (set in v1.2.2), the think block alone consumed the full budget — after stripping it, content was empty → "LLM returned empty response" on every call. Restoring to 1000 gives enough room for a think block (~300 tokens) plus the full JSON response.
+- **Fix warmup prompt**: the `"ping"` warmup with `max_tokens=3` hit the same problem. Changed to an explicit `'Reply with "ready" and nothing else.'` prompt with `max_tokens=200` so the warmup reliably succeeds.
+<br>
+<br>
+
 ## [1.2.2] - 2026-04-13
 ### Fixed / Improved
 - **`keep_alive=-1` on all Ollama calls**: model is now kept loaded in Ollama memory indefinitely. Without this, Ollama unloads the model after its default 5-minute timeout. With 300s polling intervals this hit every other decision cycle, adding 5-15s of model-reload overhead to each call.
