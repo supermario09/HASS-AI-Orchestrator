@@ -1,6 +1,6 @@
 # 🏠 HASS-AI-Orchestrator
 
-![Version](https://img.shields.io/badge/version-v1.2.3-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v1.2.4-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
 
 **The Autonomous Multi-Agent Brain for your Smart Home.**
 
@@ -10,7 +10,10 @@ The AI Orchestrator transforms your Home Assistant from a collection of manual t
 
 ---
 
-## ✨ What's New (v1.0.x → v1.2.3)
+## ✨ What's New (v1.0.x → v1.2.4)
+
+### v1.2.4 — Fix Empty LLM Responses (root cause)
+- **Restored `num_ctx=4096`**: the v1.2.2 reduction to 2048 was the actual root cause of empty responses. `num_ctx` is the *total* context window (prompt + output). Decision prompts are 1000-1500 tokens, leaving only 500-1000 tokens for output at 2048. deepseek-r1:8b's `<think>` block alone can exceed that, leaving zero tokens for the actual JSON response. 4096 gives ~2500-3000 tokens of output budget. Vision agent stays at 2048 (prompts are much shorter).
 
 ### v1.2.3 — Fix Empty LLM Responses
 - **Restored `num_predict=1000`**: deepseek-r1:8b generates a `<think>` block before every response even when `think: False` is set (silently ignored on some Ollama versions). With the v1.2.2 cap of 500 tokens, the think block consumed the entire budget — after stripping it, content was empty and every decision failed with "LLM returned empty response". 1000 tokens gives room for a think block plus the full JSON response.

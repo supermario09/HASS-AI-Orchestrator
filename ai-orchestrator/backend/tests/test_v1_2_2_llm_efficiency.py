@@ -108,8 +108,9 @@ class TestCallLlmOptions:
         )
 
     @pytest.mark.asyncio
-    async def test_num_ctx_is_2048(self):
-        """_call_llm options must include num_ctx=2048."""
+    async def test_num_ctx_is_4096(self):
+        """_call_llm options must include num_ctx=4096 — decision prompts are 1000-1500 tokens
+        and deepseek-r1 think blocks need the full output headroom."""
         agent = _make_base_agent()
         captured_options = {}
 
@@ -124,8 +125,8 @@ class TestCallLlmOptions:
              patch("agents.base_agent._LLM_SEMAPHORE", asyncio.Semaphore(1)):
             await agent._call_llm("test")
 
-        assert captured_options.get("num_ctx") == 2048, (
-            f"num_ctx={captured_options.get('num_ctx')}, expected 2048"
+        assert captured_options.get("num_ctx") == 4096, (
+            f"num_ctx={captured_options.get('num_ctx')}, expected 4096"
         )
 
     def test_default_temperature_is_0_3(self):

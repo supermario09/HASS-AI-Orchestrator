@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "slug": "ai-orchestrator",
-    "description": "v1.2.3: Fix empty LLM responses — restore num_predict=1000 for deepseek-r1:8b",
+    "description": "v1.2.4: Restore num_ctx=4096 — fixes empty responses from deepseek-r1 think blocks",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",

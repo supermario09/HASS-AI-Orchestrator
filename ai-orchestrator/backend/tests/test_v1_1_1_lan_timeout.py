@@ -135,7 +135,7 @@ class TestBaseAgentCallLlmParams:
 
     @pytest.mark.asyncio
     async def test_call_llm_uses_num_ctx_4096(self):
-        """_call_llm must pass num_ctx=2048 (halved to reduce KV cache and prefill time)."""
+        """_call_llm must pass num_ctx=4096 — decision prompts are 1000-1500 tokens and deepseek-r1 think blocks need the headroom."""
         agent, _ = _make_base_agent()
         agent.ollama_client = MagicMock()
         agent.ollama_client.chat.return_value = {"message": {"content": "hello"}}
@@ -146,8 +146,8 @@ class TestBaseAgentCallLlmParams:
 
         _, kwargs = agent.ollama_client.chat.call_args
         options = kwargs.get("options", {})
-        assert options.get("num_ctx") == 2048, (
-            f"num_ctx should be 2048, got {options.get('num_ctx')}"
+        assert options.get("num_ctx") == 4096, (
+            f"num_ctx should be 4096, got {options.get('num_ctx')}"
         )
 
     @pytest.mark.asyncio

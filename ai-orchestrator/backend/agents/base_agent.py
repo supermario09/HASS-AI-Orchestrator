@@ -223,11 +223,14 @@ class BaseAgent(ABC):
                         options={
                             "temperature": temperature,
                             "num_predict": max_tokens,
-                            "num_ctx": 2048,       # halves KV cache vs 4096; prompts fit easily
+                            # num_ctx = total context (prompt + output).  Decision prompts
+                            # are 1000-1500 tokens; with num_ctx=2048 only ~500-1000 tokens
+                            # remain for output.  deepseek-r1:8b's <think> block alone can
+                            # exceed that, leaving zero tokens for the actual JSON response.
+                            # 4096 gives ~2500-3000 tokens of output budget — enough for a
+                            # full think block plus the JSON decision.
+                            "num_ctx": 4096,
                             "think": False,
-                            # num_predict must leave room for a <think> block + actual content.
-                            # If think:False is ignored by this Ollama version, deepseek-r1:8b
-                            # generates a think block first; we need budget for both.
                             "repeat_penalty": 1.0, # disable penalty pass — wasteful for JSON
                         },
                         keep_alive=-1,             # never unload; avoids 5-15s reload cost

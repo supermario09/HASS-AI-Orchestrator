@@ -1,6 +1,12 @@
 # Changelog
 <br>
 
+## [1.2.4] - 2026-04-13
+### Fixed
+- **Restored `num_ctx=4096` for agent decisions**: this was the root cause of "LLM returned empty response" errors introduced in v1.2.2. `num_ctx` is the *total* context window (prompt + output tokens combined). Decision prompts are 1000-1500 tokens; with `num_ctx=2048` only 500-1000 tokens remained for output. deepseek-r1:8b generates a `<think>` block first (even when `think: False` is ignored by the Ollama version), which alone can exceed 1000 tokens — leaving zero tokens for the actual JSON response. After stripping the think block, content was empty. Restoring to 4096 gives ~2500-3000 tokens of output budget: enough for a full think block plus the complete JSON decision. Vision agent stays at 2048 (its prompts are much shorter — entity state + instruction only).
+<br>
+<br>
+
 ## [1.2.3] - 2026-04-13
 ### Fixed
 - **Restore `num_predict=1000`**: deepseek-r1:8b silently ignores `think: False` on some Ollama versions and generates a `<think>...</think>` block before every response. With `num_predict=500` (set in v1.2.2), the think block alone consumed the full budget — after stripping it, content was empty → "LLM returned empty response" on every call. Restoring to 1000 gives enough room for a think block (~300 tokens) plus the full JSON response.
