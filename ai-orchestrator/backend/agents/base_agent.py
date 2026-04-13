@@ -172,7 +172,7 @@ class BaseAgent(ABC):
         self,
         prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 500,
+        max_tokens: int = 1000,
     ) -> str:
         """
         Call Ollama LLM (non-blocking, serialised, with automatic retry).
@@ -198,7 +198,7 @@ class BaseAgent(ABC):
         Args:
             prompt:      Prompt text
             temperature: Sampling temperature (default 0.3 — deterministic JSON)
-            max_tokens:  Maximum tokens to generate (default 500)
+            max_tokens:  Maximum tokens to generate (default 1000 — must budget for think block)
         """
         import re
 
@@ -225,6 +225,9 @@ class BaseAgent(ABC):
                             "num_predict": max_tokens,
                             "num_ctx": 2048,       # halves KV cache vs 4096; prompts fit easily
                             "think": False,
+                            # num_predict must leave room for a <think> block + actual content.
+                            # If think:False is ignored by this Ollama version, deepseek-r1:8b
+                            # generates a think block first; we need budget for both.
                             "repeat_penalty": 1.0, # disable penalty pass — wasteful for JSON
                         },
                         keep_alive=-1,             # never unload; avoids 5-15s reload cost
@@ -410,7 +413,14 @@ If no action is needed, return an empty actions array.
         # GPU/RAM before the first real decision.  Without this, the first call
         # pays the model-load penalty (~5-15s) on top of generation time.
         try:
-            await self._call_llm("ping", max_tokens=3, temperature=0.1)
+            # Use a small but realistic budget — enough for a think block + short reply.
+            # "ping" with max_tokens=3 failed: deepseek-r1 generates <think> first even
+            # when think:False is set, consuming the entire budget before any output.
+            await self._call_llm(
+                'Reply with the word "ready" and nothing else.',
+                max_tokens=200,
+                temperature=0.1,
+            )
             print(f"✓ {self.name} model warm — decision loop started (interval: {self.decision_interval}s)")
         except Exception as e:
             print(f"⚠️ {self.name} warmup failed (non-fatal): {e}")

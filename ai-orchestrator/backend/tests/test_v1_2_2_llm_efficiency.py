@@ -5,7 +5,7 @@ Covers:
 1.  keep_alive=-1 passed to ollama_client.chat() in _call_llm
 2.  num_ctx is 2048 (down from 4096) in _call_llm options
 3.  Default temperature is 0.3 (down from 0.7) in _call_llm signature
-4.  Default max_tokens is 500 (down from 1000) in _call_llm signature
+4.  Default max_tokens is 1000 (think block + response must fit) in _call_llm signature
 5.  repeat_penalty=1.0 in _call_llm options
 6.  VisionAgent Ollama path uses keep_alive=-1
 7.  VisionAgent Ollama path uses num_ctx=2048
@@ -136,13 +136,13 @@ class TestCallLlmOptions:
         default = sig.parameters["temperature"].default
         assert default == 0.3, f"Default temperature is {default}, expected 0.3"
 
-    def test_default_max_tokens_is_500(self):
-        """_call_llm default max_tokens must be 500."""
+    def test_default_max_tokens_is_1000(self):
+        """_call_llm default max_tokens must be 1000 — budget for think block + response."""
         import inspect
         from agents.base_agent import BaseAgent
         sig = inspect.signature(BaseAgent._call_llm)
         default = sig.parameters["max_tokens"].default
-        assert default == 500, f"Default max_tokens is {default}, expected 500"
+        assert default == 1000, f"Default max_tokens is {default}, expected 1000"
 
     @pytest.mark.asyncio
     async def test_repeat_penalty_is_1_0(self):
@@ -301,8 +301,8 @@ class TestRunDecisionLoopWarmup:
                 pass
 
         assert len(call_order) >= 2, f"Expected warmup + gather, got {call_order}"
-        # First call must be the warmup (prompt starts with "ping")
-        assert call_order[0][0] == "llm" and call_order[0][1].startswith("ping"), (
+        # First call must be the warmup (prompt starts with 'Reply with')
+        assert call_order[0][0] == "llm" and call_order[0][1].startswith("Reply"), (
             f"First call was not warmup: {call_order}"
         )
         # Second call must be gather_context

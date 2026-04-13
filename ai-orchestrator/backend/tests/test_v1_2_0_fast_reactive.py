@@ -504,7 +504,8 @@ class TestConfigJson:
             "expected 'deepseek-r1:8b'"
         )
 
-    def test_version_is_1_2_1(self):
-        assert self.cfg["version"] == "1.2.1", (
-            f"config.json version is {self.cfg['version']!r}, expected '1.2.1'"
+    def test_version_is_at_least_1_2_1(self):
+        from packaging.version import Version
+        assert Version(self.cfg["version"]) >= Version("1.2.1"), (
+            f"config.json version {self.cfg['version']!r} is older than 1.2.1"
         )
