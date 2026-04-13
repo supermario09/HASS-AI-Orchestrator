@@ -110,6 +110,11 @@ class UniversalAgent(BaseAgent):
         self._discovered_entities: List[str] = []
         self._entity_cache_expires: Optional[datetime] = None
 
+        # Services cache — HA services almost never change; fetching on every
+        # decision cycle wastes a network round-trip.  Cache for 10 minutes.
+        self._services_cache: Optional[dict] = None
+        self._services_cache_expires: Optional[datetime] = None
+
     # ------------------------------------------------------------------
     # Skills prompt
     # ------------------------------------------------------------------
@@ -283,13 +288,23 @@ class UniversalAgent(BaseAgent):
     async def decide(self, context: Dict) -> Dict:
         """Make decision based on instruction and current state."""
 
-        # Discover relevant services for the current entity set
+        # Discover relevant services for the current entity set.
+        # Services almost never change — cache for 10 minutes to avoid a
+        # network round-trip to HA on every 300s decision cycle.
         relevant_services_text = ""
         try:
             active_entities = self.entities or self._discovered_entities
             if active_entities:
                 domains = set(e.split(".")[0] for e in active_entities)
-                all_services = await self.ha_client.get_services()
+                services_fresh = (
+                    self._services_cache is not None
+                    and self._services_cache_expires is not None
+                    and datetime.now() < self._services_cache_expires
+                )
+                if not services_fresh:
+                    self._services_cache = await self.ha_client.get_services()
+                    self._services_cache_expires = datetime.now() + timedelta(minutes=10)
+                all_services = self._services_cache or {}
                 lines = []
                 for domain in domains:
                     if domain in all_services:

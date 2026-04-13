@@ -1,6 +1,6 @@
 # 🏠 HASS-AI-Orchestrator
 
-![Version](https://img.shields.io/badge/version-v1.2.1-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-122%20passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v1.2.2-blue) ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Add--on-blue) ![Status](https://img.shields.io/badge/Status-Stable-green) ![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen)
 
 **The Autonomous Multi-Agent Brain for your Smart Home.**
 
@@ -10,7 +10,14 @@ The AI Orchestrator transforms your Home Assistant from a collection of manual t
 
 ---
 
-## ✨ What's New (v1.0.x → v1.2.1)
+## ✨ What's New (v1.0.x → v1.2.2)
+
+### v1.2.2 — LLM Efficiency
+- **`keep_alive=-1`**: model stays loaded in Ollama memory permanently — eliminates the 5-15s model-reload cost that was hitting every other decision cycle at 300s intervals
+- **`num_ctx` halved to 2048**: decision prompts fit in 600-1200 tokens; cutting the KV cache halves prefill time and reduces VRAM pressure
+- **Temperature 0.7 → 0.3**: more deterministic JSON, slightly faster sampling
+- **Model warmup before first decision**: agents ping the model on startup so the first real decision doesn't pay the load penalty
+- **Services cache in agents**: `get_services()` now cached 10 minutes instead of fetching on every 300s cycle
 
 ### v1.2.1 — Stability Revert
 - **Reverted event-driven wake**: removed reactive subscriptions — they increased Ollama call frequency and worsened timeouts. Use HA native automations for reactive triggers; the AI layer handles slow decisioning only.
@@ -154,7 +161,7 @@ Rate agent decisions with thumbs-up/down. Export all rated decisions as JSONL in
 
 ## 🧪 Test Suite
 
-122 automated tests covering all stability fixes, entity management, vision fallback, feedback, export, LAN timeout, and revert correctness.
+134 automated tests covering all stability fixes, entity management, vision fallback, feedback, export, LAN timeout, revert correctness, and LLM efficiency parameters.
 
 ```bash
 cd ai-orchestrator/backend

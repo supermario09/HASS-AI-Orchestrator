@@ -269,9 +269,11 @@ class VisionAgent:
                         options={
                             "temperature": 0.3,
                             "num_predict": 200,
-                            "num_ctx": 4096,
+                            "num_ctx": 2048,       # vision prompts fit within 2k easily
                             "think": False,
+                            "repeat_penalty": 1.0,
                         },
+                        keep_alive=-1,             # never unload; avoids reload cost
                         stream=False,
                     )
                 content = response["message"]["content"]

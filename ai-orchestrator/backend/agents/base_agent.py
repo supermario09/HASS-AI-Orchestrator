@@ -171,8 +171,8 @@ class BaseAgent(ABC):
     async def _call_llm(
         self,
         prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1000,
+        temperature: float = 0.3,
+        max_tokens: int = 500,
     ) -> str:
         """
         Call Ollama LLM (non-blocking, serialised, with automatic retry).
@@ -180,18 +180,25 @@ class BaseAgent(ABC):
         Tuned for a remote Ollama instance on a capable machine (e.g. M4 Mac Mini
         with 16GB RAM) accessed over a local network from the HA host.
 
-        The primary cause of empty responses in this topology is the default httpx
-        read_timeout (5s) firing before the model finishes generating over the LAN.
-        The ollama.Client is constructed with read_timeout=120s (see __init__) so
-        the response always has time to arrive.
+        Performance tuning rationale:
+        - keep_alive=-1: model stays loaded in Ollama memory indefinitely — avoids
+          the 5-15s reload cost that fires after the default 5-min unload timeout.
+          With 300s polling intervals this would hit every other decision cycle.
+        - num_ctx=2048: decision prompts are 600-1200 tokens; 2048 halves the KV
+          cache vs 4096, reducing prefill time and VRAM pressure.
+        - temperature=0.3: lower entropy → more deterministic JSON, slightly faster
+          sampling. High temperature adds noise without benefiting structured output.
+        - num_predict=500: JSON decisions are 50-300 tokens; capping earlier stops
+          runaway generation without truncating real responses.
+        - repeat_penalty=1.0: disables the repeat-penalty computation pass, which
+          is useless for short structured JSON output.
 
-        Retries up to 3 times on empty response or transient network blips,
-        releasing the semaphore between attempts so other agents can proceed.
+        Retries up to 3 times on empty response or transient network blips.
 
         Args:
             prompt:      Prompt text
-            temperature: Sampling temperature
-            max_tokens:  Maximum tokens to generate (1000 — fine on M4 Mac Mini)
+            temperature: Sampling temperature (default 0.3 — deterministic JSON)
+            max_tokens:  Maximum tokens to generate (default 500)
         """
         import re
 
@@ -216,10 +223,11 @@ class BaseAgent(ABC):
                         options={
                             "temperature": temperature,
                             "num_predict": max_tokens,
-                            # 4096 context — comfortable for M4 Mac Mini 16GB
-                            "num_ctx": 4096,
+                            "num_ctx": 2048,       # halves KV cache vs 4096; prompts fit easily
                             "think": False,
+                            "repeat_penalty": 1.0, # disable penalty pass — wasteful for JSON
                         },
+                        keep_alive=-1,             # never unload; avoids 5-15s reload cost
                         stream=False,
                     )
 
@@ -397,7 +405,16 @@ If no action is needed, return an empty actions array.
             if ha and ha.connected:
                 break
             await asyncio.sleep(1)
-        print(f"✓ {self.name} decision loop started (interval: {self.decision_interval}s)")
+        print(f"✓ {self.name} HA connected — warming up {self.model_name}...")
+        # Pre-warm: fire a minimal prompt so the model is loaded into Ollama's
+        # GPU/RAM before the first real decision.  Without this, the first call
+        # pays the model-load penalty (~5-15s) on top of generation time.
+        try:
+            await self._call_llm("ping", max_tokens=3, temperature=0.1)
+            print(f"✓ {self.name} model warm — decision loop started (interval: {self.decision_interval}s)")
+        except Exception as e:
+            print(f"⚠️ {self.name} warmup failed (non-fatal): {e}")
+            print(f"✓ {self.name} decision loop started (interval: {self.decision_interval}s)")
 
         while True:
             try:

@@ -357,13 +357,15 @@ class TestPlainPollingLoop:
         agent._ha_provider = lambda: mock_ha
 
         sleep_calls = []
-        call_count = 0
 
         async def _fake_sleep(seconds):
             sleep_calls.append(seconds)
-            if len(sleep_calls) >= 2:
+            # Stop after we've seen a 300s sleep (the decision interval sleep)
+            if seconds == 300:
                 raise KeyboardInterrupt
 
+        # Patch _call_llm so the warmup succeeds immediately (no retry sleeps)
+        agent._call_llm = AsyncMock(return_value="ok")
         agent.gather_context = AsyncMock(return_value={})
         agent.decide = AsyncMock(return_value={"reasoning": "ok", "actions": []})
         agent.execute = AsyncMock(return_value=[])
@@ -375,7 +377,6 @@ class TestPlainPollingLoop:
             except KeyboardInterrupt:
                 pass
 
-        # First sleep is the HA-wait loop (1s each); later sleeps should include decision_interval
         decision_sleeps = [s for s in sleep_calls if s == 300]
         assert decision_sleeps, (
             f"run_decision_loop never slept for decision_interval=300. Sleeps: {sleep_calls}"

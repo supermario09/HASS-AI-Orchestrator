@@ -1,6 +1,19 @@
 # Changelog
 <br>
 
+## [1.2.2] - 2026-04-13
+### Fixed / Improved
+- **`keep_alive=-1` on all Ollama calls**: model is now kept loaded in Ollama memory indefinitely. Without this, Ollama unloads the model after its default 5-minute timeout. With 300s polling intervals this hit every other decision cycle, adding 5-15s of model-reload overhead to each call.
+- **`num_ctx` reduced from 4096 → 2048**: halves the KV-cache allocation. Decision prompts are 600-1200 tokens — the 4096 window was never needed. Smaller KV cache means faster prefill and less VRAM pressure.
+- **Default `temperature` lowered from 0.7 → 0.3**: agents produce structured JSON decisions. High temperature adds noise without benefit. Lower entropy speeds up sampling slightly and reduces JSON parse errors.
+- **Default `num_predict` reduced from 1000 → 500**: JSON decisions are 50-300 tokens. Capping earlier terminates generation sooner without truncating real responses.
+- **`repeat_penalty=1.0`**: disables the repeat-penalty computation pass on every token. Useful for prose; wasted overhead for short structured JSON.
+- **Model warmup before first decision**: `run_decision_loop` fires a minimal `_call_llm("ping", max_tokens=3)` after HA connects. This pre-loads the model into Ollama's memory so the first real decision doesn't pay the load penalty.
+- **Services cache in UniversalAgent**: `get_services()` was called on every `decide()` — a network round-trip to HA every 300s. Services almost never change (only on integration reload). Now cached for 10 minutes.
+- **Tests** (12 new): `keep_alive=-1` captured from chat() call, `num_ctx=2048` in both base and vision agent, temperature/max_tokens defaults, `repeat_penalty=1.0`, warmup fires before gather_context, services cache hit on second call, cache expiry triggers re-fetch (134 total).
+<br>
+<br>
+
 ## [1.2.1] - 2026-04-13
 ### Fixed
 - **Reverted event-driven agent wake**: removed `event_driven`, `_trigger_event`, `_on_entity_changed`, and `asyncio.wait_for` wake logic from `base_agent.py`. Event-driven triggering increased Ollama call frequency and made timeouts worse — HA native automations are better suited to reactive triggering. Agents now use simple polling only.

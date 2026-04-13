@@ -3,10 +3,10 @@ Tests for v1.1.1 LAN-timeout fix.
 
 Covers:
 1. BaseAgent.ollama_client is constructed with httpx.Timeout(read=120)
-2. BaseAgent._call_llm passes num_ctx=4096 and num_predict=1000
+2. BaseAgent._call_llm passes num_ctx=2048 and num_predict=500
 3. BaseAgent._call_llm retry delays are 3s and 8s (tuned for LAN blips)
 4. VisionAgent._ollama_client is also constructed with httpx.Timeout(read=120)
-5. VisionAgent._analyze_with_ollama_text passes num_ctx=4096 to Ollama
+5. VisionAgent._analyze_with_ollama_text passes num_ctx=2048 to Ollama
 6. VisionAgent retry delays are also [3, 8]
 7. BaseAgent._call_llm retries on empty response (integration of semaphore + timeout)
 8. BaseAgent._call_llm returns ERROR string after all retries exhausted
@@ -135,7 +135,7 @@ class TestBaseAgentCallLlmParams:
 
     @pytest.mark.asyncio
     async def test_call_llm_uses_num_ctx_4096(self):
-        """_call_llm must pass num_ctx=4096 (M4 Mac Mini has headroom)."""
+        """_call_llm must pass num_ctx=2048 (halved to reduce KV cache and prefill time)."""
         agent, _ = _make_base_agent()
         agent.ollama_client = MagicMock()
         agent.ollama_client.chat.return_value = {"message": {"content": "hello"}}
@@ -146,8 +146,8 @@ class TestBaseAgentCallLlmParams:
 
         _, kwargs = agent.ollama_client.chat.call_args
         options = kwargs.get("options", {})
-        assert options.get("num_ctx") == 4096, (
-            f"num_ctx should be 4096, got {options.get('num_ctx')}"
+        assert options.get("num_ctx") == 2048, (
+            f"num_ctx should be 2048, got {options.get('num_ctx')}"
         )
 
     @pytest.mark.asyncio
@@ -274,7 +274,7 @@ class TestVisionAgentOllamaTextParams:
 
     @pytest.mark.asyncio
     async def test_analyze_with_ollama_text_uses_num_ctx_4096(self):
-        """_analyze_with_ollama_text must pass num_ctx=4096."""
+        """_analyze_with_ollama_text must pass num_ctx=2048."""
         agent, _ = _make_vision_agent()
 
         mock_ha = MagicMock()
@@ -294,8 +294,8 @@ class TestVisionAgentOllamaTextParams:
         assert result is not None
         _, kwargs = agent._ollama_client.chat.call_args
         options = kwargs.get("options", {})
-        assert options.get("num_ctx") == 4096, (
-            f"VisionAgent num_ctx should be 4096, got {options.get('num_ctx')}"
+        assert options.get("num_ctx") == 2048, (
+            f"VisionAgent num_ctx should be 2048, got {options.get('num_ctx')}"
         )
 
     @pytest.mark.asyncio

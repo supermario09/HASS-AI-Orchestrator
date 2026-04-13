@@ -1,8 +1,8 @@
 {
     "name": "AI Orchestrator",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "slug": "ai-orchestrator",
-    "description": "v1.2.1: Revert event-driven; single global semaphore; deepseek-r1:8b default",
+    "description": "v1.2.2: keep_alive=-1 + num_ctx=2048 + warmup + services cache — cut LLM latency",
     "url": "https://github.com/supermario09/HASS-AI-Orchestrator",
     "arch": [
         "amd64",
